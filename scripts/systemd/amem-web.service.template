@@ -1,0 +1,46 @@
+# amem 只读 Web 的 systemd 用户单元模板。
+#
+# 安装（以部署 vault 的普通用户执行）：
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/systemd/amem-web.service.template ~/.config/systemd/user/amem-web.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now amem-web
+#   loginctl enable-linger "$USER"     # 用户未登录时保持运行
+#
+# 令牌放在 ~/.config/amem/web.env（权限 600）：
+#   AMEM_WEB_TOKEN=<随机值>
+#
+# %h 是 systemd 的用户主目录占位符，无需手动替换。
+
+[Unit]
+Description=amem read-only memory web
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/agent-memory-sync
+Environment=HOME=%h
+Environment=AMEM_VAULT=%h/memory-vault
+Environment=AMEM_ARCHIVE=%h/transcript-archive
+Environment=AMEM_REPORTS=%h/dream-reports
+Environment=AMEM_WEB_HOST=127.0.0.1
+Environment=AMEM_WEB_PORT=8787
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=-%h/.config/amem/web.env
+ExecStart=%h/agent-memory-sync/scripts/web.sh
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=default.target

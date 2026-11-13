@@ -17,6 +17,7 @@
 - [x] `scripts/install.sh`：新设备接入（协议引用、cleanupPeriodDays、additionalDirectories）
 - [x] `scripts/check-agents.sh`：检查各 agent 是否已接入
 - [x] `scripts/autocommit.sh`：服务器每小时自动提交
+- [x] 服务器只读 Web（`docs/web.md`）：设备活动、归档状态、记忆/报告/提案查看
 - [ ] 第二台设备接入
 - [ ] 试用两周：切换 agent/设备后偏好是否保持
 

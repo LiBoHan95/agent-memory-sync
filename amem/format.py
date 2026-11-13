@@ -29,7 +29,7 @@ IGNORED_FILES = frozenset({".DS_Store"})
 _KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t]+(.*))?$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]|#]+)(?:[|#][^\[\]]*)?\]\]")
-_MDLINK_RE = re.compile(r"\]\(([^)\s]+)\)")
+_MDLINK_RE = re.compile(r"\]\(([^)\]\s]+)\)")
 _IDENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -135,9 +135,10 @@ def validate_note(rel: str, text: str) -> tuple[dict[str, str] | None, list[Issu
 
 # ---------- vault ----------
 
-def iter_files(root: Path) -> dict[str, bytes]:
+def iter_files(root: Path, *, max_bytes: int | None = None) -> dict[str, bytes]:
     """返回 vault 内所有文件 {相对路径(posix): 内容}，跳过 .git 等同步/版本目录。
-    符号链接不跟随，作为一个特殊条目记录（闸门会拒绝）。"""
+    符号链接不跟随，作为一个特殊条目记录（闸门会拒绝）。
+    max_bytes 给定时跳过更大的普通文件（Web 只做摘要校验，避免读入超大 log）。"""
     out: dict[str, bytes] = {}
     root = Path(root)
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
@@ -152,7 +153,16 @@ def iter_files(root: Path) -> dict[str, bytes]:
                 continue
             p = Path(dirpath, fn)
             rel = p.relative_to(root).as_posix()
-            out[rel] = SYMLINK_MARK if p.is_symlink() else p.read_bytes()
+            if p.is_symlink():
+                out[rel] = SYMLINK_MARK
+                continue
+            if max_bytes is not None:
+                try:
+                    if p.stat().st_size > max_bytes:
+                        continue
+                except OSError:
+                    continue
+            out[rel] = p.read_bytes()
     return out
 
 
@@ -166,10 +176,29 @@ def decode(data: bytes) -> str | None:
         return None
 
 
+def _strip_comments(body: str) -> str:
+    """线性移除 HTML 注释，避免未闭合注释触发正则回溯。"""
+    out: list[str] = []
+    pos = 0
+    while True:
+        start = body.find("<!--", pos)
+        if start < 0:
+            out.append(body[pos:])
+            break
+        end = body.find("-->", start + 4)
+        if end < 0:
+            # 与原来的正则一致：没有闭合标记时不改写剩余文本。
+            out.append(body[pos:])
+            break
+        out.append(body[pos:start])
+        pos = end + 3
+    return "".join(out)
+
+
 def extract_links(body: str) -> tuple[list[str], list[str]]:
     """返回 ([[name]] 列表, 相对路径 markdown 链接列表)。跳过 http(s)/mailto/锚点和代码块。"""
     body = re.sub(r"```.*?```", "", body, flags=re.S)
-    body = re.sub(r"<!--.*?-->", "", body, flags=re.S)
+    body = _strip_comments(body)
     body = re.sub(r"`[^`\n]*`", "", body)
     wikis = [m.group(1).strip() for m in _WIKILINK_RE.finditer(body)]
     paths = []

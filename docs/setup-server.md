@@ -60,12 +60,16 @@ crontab -e
 
 需要异地备份时，加一个私有远程仓库并在 cron 里 `git push`。
 
-## 5. 网络
+## 5. 只读 Web（可选）
+
+部署后可在服务器本机查看各设备活动、归档状态和记忆文件，不做编辑。按 [web.md](web.md) 安装 systemd 用户单元；默认只监听 `127.0.0.1:8787`，通过 SSH 隧道访问，不暴露公网。
+
+## 6. 网络
 
 - 设备与服务器都在 Tailscale 里时最简单：Syncthing 直接走 tailnet 地址，无需开放端口。
 - 不用 Tailscale 时开放 TCP/UDP 22000（同步端口），8384 保持仅本机。
 
-## 6. 验证
+## 7. 验证
 
 1. 在设备 A 上 `echo test >> ~/memory-vault/log/test.md`。
 2. 几秒内在服务器和设备 B 上能看到。
