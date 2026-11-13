@@ -1,0 +1,5 @@
+.DS_Store
+.stfolder/
+.stversions/
+*.sync-conflict-*
+.env
