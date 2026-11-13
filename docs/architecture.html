@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-memory-sync · 整体架构</title>
+<style>
+:root{
+  --bg:#f6f5f1; --panel:#ffffff; --ink:#1f2328; --muted:#6b7280; --line:#d6d3cc;
+  --asset:#b45309; --asset-bg:#fff8ee;
+  --shell:#8b929c; --shell-bg:#f2f3f5;
+  --sync:#2563eb; --rsync:#0f8a80; --dream:#7c3aed; --dream-bg:#f6f2ff;
+  --ga:#15803d; --gb:#a16207; --gc:#b91c1c;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#16171a; --panel:#1f2125; --ink:#e7e7e4; --muted:#9aa0a8; --line:#3a3d43;
+    --asset:#f0a24a; --asset-bg:#2a2218;
+    --shell:#7d838c; --shell-bg:#26282d;
+    --sync:#6b9cff; --rsync:#3cc4b7; --dream:#a78bfa; --dream-bg:#241f33;
+    --ga:#4ade80; --gb:#facc15; --gc:#f87171;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+main{max-width:1240px;margin:0 auto;padding:32px 20px 48px}
+h1{font-size:22px;margin:0 0 6px}
+.sub{color:var(--muted);margin:0 0 20px;font-size:14px}
+svg{width:100%;height:auto;display:block}
+svg text{fill:var(--ink);font-size:13px}
+svg .t-title{font-size:15px;font-weight:600}
+svg .t-band{font-size:13px;font-weight:600;fill:var(--muted);letter-spacing:.5px}
+svg .t-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;font-weight:600}
+svg .t-small{font-size:11.5px;fill:var(--muted)}
+svg .t-badge{font-size:11px;font-weight:600}
+.band{fill:var(--panel);stroke:var(--line);stroke-width:1}
+.card{fill:var(--bg);stroke:var(--line);stroke-width:1}
+.shell{fill:var(--shell-bg);stroke:var(--shell);stroke-width:1;stroke-dasharray:4 3}
+.asset{fill:var(--asset-bg);stroke:var(--asset);stroke-width:2}
+.row{fill:var(--panel);stroke:var(--line);stroke-width:1}
+.row-hot{fill:var(--panel);stroke:var(--asset);stroke-width:1.5}
+.dream{fill:var(--dream-bg);stroke:var(--dream);stroke-width:2}
+.step{fill:var(--panel);stroke:var(--dream);stroke-width:1}
+.opt{fill:none;stroke:var(--shell);stroke-width:1.5;stroke-dasharray:6 4}
+.b-asset{fill:var(--asset)} .b-shell{fill:var(--shell)} .b-dream{fill:var(--dream)}
+.badge-text{fill:#fff !important}
+.l{fill:none;stroke-width:2}
+.l-ink{stroke:var(--muted);stroke-width:1.5}
+.l-sync{stroke:var(--sync)} .l-rsync{stroke:var(--rsync)} .l-dream{stroke:var(--dream)}
+.l-a{stroke:var(--ga)} .l-b{stroke:var(--gb);stroke-dasharray:6 3} .l-c{stroke:var(--gc)}
+.l-loop{stroke:var(--gc);stroke-dasharray:3 3}
+.halo{fill:none;stroke:var(--bg);stroke-width:9}
+.f-ink{fill:var(--muted)} .f-sync{fill:var(--sync)} .f-rsync{fill:var(--rsync)} .f-dream{fill:var(--dream)}
+.f-a{fill:var(--ga)} .f-b{fill:var(--gb)} .f-c{fill:var(--gc)}
+.c-sync{fill:var(--sync) !important} .c-rsync{fill:var(--rsync) !important}
+.c-dream{fill:var(--dream) !important} .c-asset{fill:var(--asset) !important}
+.c-a{fill:var(--ga) !important} .c-b{fill:var(--gb) !important} .c-c{fill:var(--gc) !important}
+.legend{display:flex;flex-wrap:wrap;gap:10px 28px;margin-top:18px;font-size:13px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:8px}
+.sw{display:inline-block;width:28px;height:0;border-top:2px solid}
+.box{display:inline-block;width:18px;height:12px;border-radius:3px}
+.notes{margin-top:22px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.notes div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:13.5px;line-height:1.6}
+.notes b{display:block;margin-bottom:4px}
+</style>
+</head>
+<body>
+<main>
+<h1>agent-memory-sync · 整体架构</h1>
+<p class="sub">一份记忆，多设备、多 agent 共用。只有两个资产：整理后的笔记与原始转录，其余都是可替换的外壳。</p>
+<svg viewBox="0 0 1200 830" role="img" aria-label="整体架构图">
+<defs>
+  <marker id="m-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="f-ink"/></marker>
+  <marker id="m-sync" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="f-sync"/></marker>
+  <marker id="m-rsync" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="f-rsync"/></marker>
+  <marker id="m-dream" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="f-dream"/></marker>
+  <marker id="m-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="f-a"/></marker>
+  <marker id="m-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="f-b"/></marker>
+  <marker id="m-c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="f-c"/></marker>
+</defs>
+
+<!-- ===== 设备层 ===== -->
+<rect class="band" x="20" y="16" width="1160" height="270" rx="12"/>
+<text class="t-band" x="40" y="42">设备层 · 多地点 × 多设备 × 多 agent</text>
+
+<g>
+  <rect class="card" x="40" y="56" width="540" height="196" rx="10"/>
+  <text class="t-title" x="60" y="82">设备 A</text>
+  <text class="t-small" x="116" y="82">例：家里的 MacBook</text>
+  <rect class="shell" x="60" y="94" width="500" height="38" rx="8"/>
+  <rect class="row" x="72" y="101" width="104" height="24" rx="12"/><text x="124" y="118" text-anchor="middle">Claude Code</text>
+  <rect class="row" x="184" y="101" width="72" height="24" rx="12"/><text x="220" y="118" text-anchor="middle">Codex</text>
+  <rect class="row" x="264" y="101" width="72" height="24" rx="12"/><text x="300" y="118" text-anchor="middle">Cursor</text>
+  <text class="t-small" x="352" y="118">…　agent 是可替换的外壳</text>
+  <path class="l l-ink" d="M185 134 V168" marker-start="url(#m-ink)" marker-end="url(#m-ink)"/>
+  <text class="t-small" x="194" y="155">启动注入 · 按需读 · 追加 log</text>
+  <path class="l l-ink" d="M445 134 V168" marker-end="url(#m-ink)"/>
+  <text class="t-small" x="454" y="155">自动生成</text>
+  <rect class="row" x="60" y="170" width="250" height="62" rx="8"/>
+  <text class="t-mono" x="76" y="196">~/memory-vault</text>
+  <text class="t-small" x="76" y="218">本地副本，与服务器保持一致</text>
+  <rect class="row" x="330" y="170" width="230" height="62" rx="8"/>
+  <text class="t-mono" x="346" y="196">本地转录 *.jsonl</text>
+  <text class="t-small" x="346" y="218">Claude Code 默认 30 天后删除</text>
+</g>
+
+<g>
+  <rect class="card" x="620" y="56" width="540" height="196" rx="10"/>
+  <text class="t-title" x="640" y="82">设备 B</text>
+  <text class="t-small" x="696" y="82">例：公司的工作站</text>
+  <rect class="shell" x="640" y="94" width="500" height="38" rx="8"/>
+  <rect class="row" x="652" y="101" width="72" height="24" rx="12"/><text x="688" y="118" text-anchor="middle">Codex</text>
+  <rect class="row" x="732" y="101" width="72" height="24" rx="12"/><text x="768" y="118" text-anchor="middle">Gemini</text>
+  <rect class="row" x="812" y="101" width="56" height="24" rx="12"/><text x="840" y="118" text-anchor="middle">Pi</text>
+  <text class="t-small" x="884" y="118">…　更多设备同理</text>
+  <path class="l l-ink" d="M765 134 V168" marker-start="url(#m-ink)" marker-end="url(#m-ink)"/>
+  <text class="t-small" x="774" y="155">启动注入 · 按需读 · 追加 log</text>
+  <path class="l l-ink" d="M1025 134 V168" marker-end="url(#m-ink)"/>
+  <text class="t-small" x="1034" y="155">自动生成</text>
+  <rect class="row" x="640" y="170" width="250" height="62" rx="8"/>
+  <text class="t-mono" x="656" y="196">~/memory-vault</text>
+  <text class="t-small" x="656" y="218">本地副本，与服务器保持一致</text>
+  <rect class="row" x="910" y="170" width="230" height="62" rx="8"/>
+  <text class="t-mono" x="926" y="196">本地转录 *.jsonl</text>
+  <text class="t-small" x="926" y="218">各 agent 自己的会话记录</text>
+</g>
+<!-- ===== 服务器层 ===== -->
+<rect class="band" x="20" y="310" width="1160" height="500" rx="12"/>
+<text class="t-band" x="250" y="336">服务器层 · 常在线 · 你提供</text>
+
+<!-- vault -->
+<rect class="asset" x="40" y="350" width="520" height="312" rx="10"/>
+<text class="t-mono" x="60" y="378">~/memory-vault</text>
+<rect class="b-asset" x="190" y="364" width="92" height="20" rx="10"/><text class="t-badge badge-text" x="236" y="378" text-anchor="middle">资产 · 笔记</text>
+<text class="t-small" x="296" y="378">Markdown + YAML · schema_version</text>
+<rect class="row-hot" x="80" y="400" width="464" height="30" rx="6"/><text class="t-mono" x="94" y="420">MEMORY.md</text><text x="230" y="420">注入层 · 索引 · ≤200 行</text>
+<rect class="row" x="80" y="436" width="464" height="30" rx="6"/><text class="t-mono" x="94" y="456">profile/</text><text x="230" y="456">画像、偏好</text>
+<rect class="row" x="80" y="472" width="464" height="30" rx="6"/><text class="t-mono" x="94" y="492">rules/</text><text x="230" y="492">验证过的规则</text>
+<rect class="row" x="80" y="508" width="464" height="30" rx="6"/><text class="t-mono" x="94" y="528">projects/</text><text x="230" y="528">项目背景</text>
+<rect class="row" x="80" y="544" width="464" height="30" rx="6"/><text class="t-mono" x="94" y="564">proposals/</text><text x="230" y="564">待你确认的变更</text>
+<rect class="row" x="80" y="580" width="464" height="30" rx="6"/><text class="t-mono" x="94" y="600">.git</text><text x="230" y="600">每小时自动提交 · 只在服务器上</text>
+<rect class="row" x="80" y="616" width="464" height="30" rx="6"/><text class="t-mono" x="94" y="636">log/</text><text x="230" y="636">原始观察 · 只追加 · 按设备分文件</text>
+<!-- confirm loop -->
+<path class="l l-loop" d="M80 559 H60 V451 H78" marker-end="url(#m-c)"/>
+<text class="t-small c-c" x="54" y="505" text-anchor="middle" transform="rotate(-90 54 505)">你确认后应用</text>
+
+<!-- archive -->
+<rect class="asset" x="640" y="350" width="520" height="180" rx="10"/>
+<text class="t-mono" x="660" y="378">~/transcript-archive</text>
+<rect class="b-asset" x="836" y="364" width="92" height="20" rx="10"/><text class="t-badge badge-text" x="882" y="378" text-anchor="middle">资产 · 转录</text>
+<text class="t-small" x="940" y="378">唯一不能再生的数据</text>
+<rect class="row" x="660" y="394" width="480" height="28" rx="6"/><text class="t-mono" x="674" y="413">&lt;设备&gt;/claude-code/</text>
+<rect class="row" x="660" y="428" width="480" height="28" rx="6"/><text class="t-mono" x="674" y="447">&lt;设备&gt;/codex/</text>
+<rect class="row" x="660" y="462" width="480" height="28" rx="6"/><text class="t-mono" x="674" y="481">&lt;设备&gt;/pi/  …</text>
+<text class="t-small" x="660" y="514">原样保存 · 加密 · 永久保留 · 不回流设备 · 不注入 agent</text>
+
+<!-- dreaming -->
+<rect class="dream" x="640" y="560" width="520" height="230" rx="10"/>
+<text class="t-title" x="660" y="588">dreaming</text>
+<rect class="b-dream" x="740" y="574" width="78" height="20" rx="10"/><text class="t-badge badge-text" x="779" y="588" text-anchor="middle">自动整理</text>
+<text class="t-small" x="830" y="588">每天一次 · headless agent · 无 Bash 权限</text>
+<rect class="f-a" x="660" y="611" width="10" height="10" rx="2"/><text x="678" y="620"><tspan class="c-a" font-weight="600">A 全自动</tspan>　索引、去重、断链、格式迁移 → 直接提交</text>
+<rect class="f-b" x="660" y="641" width="10" height="10" rx="2"/><text x="678" y="650"><tspan class="c-b" font-weight="600">B 可撤销</tspan>　项目背景、标记过期 → 独立 commit</text>
+<rect class="f-c" x="660" y="671" width="10" height="10" rx="2"/><text x="678" y="680"><tspan class="c-c" font-weight="600">C 需确认</tspan>　改 profile/ rules/ → 写入 proposals/</text>
+<rect class="step" x="660" y="720" width="104" height="40" rx="6"/><text x="712" y="745" text-anchor="middle">收集增量</text>
+<rect class="step" x="782" y="720" width="104" height="40" rx="6"/><text x="834" y="745" text-anchor="middle">解析转录</text>
+<rect class="step" x="904" y="720" width="104" height="40" rx="6"/><text x="956" y="745" text-anchor="middle">提炼</text>
+<rect class="step" x="1026" y="720" width="104" height="40" rx="6"/><text x="1078" y="745" text-anchor="middle">gitleaks 校验</text>
+<path class="l l-dream" d="M764 740 H780" marker-end="url(#m-dream)"/>
+<path class="l l-dream" d="M886 740 H902" marker-end="url(#m-dream)"/>
+<path class="l l-dream" d="M1008 740 H1024" marker-end="url(#m-dream)"/>
+<text class="t-small" x="660" y="780">处理顺序 →　产出按上面 A / B / C 分级写回 vault</text>
+<!-- 检索层（可选） -->
+<rect class="opt" x="40" y="690" width="520" height="100" rx="10"/>
+<text class="t-title" x="60" y="718" style="fill:var(--muted)">检索层</text>
+<rect class="b-shell" x="116" y="704" width="88" height="20" rx="10"/><text class="t-badge badge-text" x="160" y="718" text-anchor="middle">三期 · 可选</text>
+<text x="60" y="746">mem0 / Hindsight，以 MCP 提供给各 agent</text>
+<text class="t-small" x="60" y="770">只索引 vault 与转录归档，不当事实来源，随时可丢弃重建</text>
+<path class="l l-ink" d="M300 664 V688" stroke-dasharray="4 3" marker-end="url(#m-ink)"/>
+
+<!-- ===== 连线 ===== -->
+<!-- 设备 A vault ⇄ 服务器 vault -->
+<path class="l l-sync" d="M185 234 V348" marker-start="url(#m-sync)" marker-end="url(#m-sync)"/>
+<text class="t-small c-sync" x="195" y="300">Syncthing · 双向 · 持续</text>
+<!-- 设备 A 转录 → 归档 -->
+<!-- 设备 B vault ⇄ 服务器 vault（跨线加底色） -->
+<path class="l l-rsync" d="M445 234 V298 H700 V348" marker-end="url(#m-rsync)"/>
+<path class="halo" d="M765 236 V272 H500 V346"/>
+<path class="l l-sync" d="M765 234 V272 H500 V348" marker-start="url(#m-sync)" marker-end="url(#m-sync)"/>
+<text class="t-small c-sync" x="775" y="266">Syncthing</text>
+<!-- 设备 B 转录 → 归档 -->
+<path class="l l-rsync" d="M1025 234 V348" marker-end="url(#m-rsync)"/>
+<text class="t-small c-rsync" x="1035" y="300">rsync · 单向 · 只增 · 每小时</text>
+
+<!-- dreaming 读取 -->
+<path class="l l-dream" d="M900 532 V558" marker-end="url(#m-dream)"/>
+<text class="t-small c-dream" x="910" y="550">读新转录（经解析器过滤）</text>
+<path class="l l-dream" d="M562 631 H638" marker-end="url(#m-dream)"/>
+<text class="t-small c-dream" x="572" y="650">读新 log</text>
+
+<!-- dreaming 写回 A / B / C -->
+<path class="l l-a" d="M640 580 H605 V415 H548" marker-end="url(#m-a)"/>
+<path class="l l-b" d="M640 596 H590 V523 H548" marker-end="url(#m-b)"/>
+<path class="l l-c" d="M640 612 H575 V559 H548" marker-end="url(#m-c)"/>
+
+</svg>
+<div class="legend">
+  <span><i class="box" style="background:var(--asset-bg);border:2px solid var(--asset)"></i>资产（必须长期保存）</span>
+  <span><i class="box" style="background:var(--shell-bg);border:1px dashed var(--shell)"></i>外壳（可替换）</span>
+  <span><i class="sw" style="border-color:var(--sync)"></i>Syncthing 双向同步</span>
+  <span><i class="sw" style="border-color:var(--rsync)"></i>rsync 单向归档</span>
+  <span><i class="sw" style="border-color:var(--dream)"></i>dreaming 读取</span>
+  <span><i class="sw" style="border-color:var(--ga)"></i>A 全自动</span>
+  <span><i class="sw" style="border-color:var(--gb);border-top-style:dashed"></i>B 可撤销</span>
+  <span><i class="sw" style="border-color:var(--gc)"></i>C 需确认</span>
+</div>
+<div class="notes">
+  <div><b>记忆读写</b>agent 读写本地 vault 副本，Syncthing 与服务器双向同步。会话中只追加 log/，且按设备分文件，多端同时写几乎不冲突。</div>
+  <div><b>转录归档</b>各 agent 的原始转录用 rsync 单向推到服务器。本地被清理后服务器仍保留，只供 dreaming 读取。</div>
+  <div><b>自动整理</b>每天处理一次增量。A、B 级直接写回 vault；C 级写入 proposals/，任意 agent 下次启动时提醒你确认。</div>
+</div>
+</main>
+</body>
+</html>

@@ -3,3 +3,4 @@
 .stversions/
 *.sync-conflict-*
 .env
+__pycache__/

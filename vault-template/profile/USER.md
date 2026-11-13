@@ -4,7 +4,7 @@ name: user-profile
 description: 用户是谁：身份、角色、设备、常驻项目
 type: profile
 status: active
-source: manual
+source: user@manual
 created: 2026-11-13
 updated: 2026-11-13
 ---

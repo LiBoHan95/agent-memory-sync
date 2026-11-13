@@ -44,8 +44,11 @@ brew services start syncthing
   ```
   .git
   .DS_Store
+  .dream-state
+  .*.amem-tmp
   ```
-  `.git` 只在服务器上存在，不同步到客户端，避免多端 git 状态互相覆盖。
+  `.git` 和 `.dream-state` 只在服务器上存在，不同步到客户端，避免多端 git 状态互相覆盖。
+  `.*.amem-tmp` 是闸门写文件时的临时文件。
 
 ## 4. 服务器自动提交
 
