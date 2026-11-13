@@ -35,12 +35,9 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-ProtectSUIDSGID=yes
-LockPersonality=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# 用户单元在部分云主机/容器里无法使用 ProtectKernel*/ProtectControlGroups、
+# ProtectSUIDSGID 和 LockPersonality，会以 218/CAPABILITIES 启动失败。
 
 [Install]
 WantedBy=default.target
