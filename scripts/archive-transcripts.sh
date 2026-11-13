@@ -20,6 +20,7 @@
 #   AMEM_ARCHIVE_LOG      日志，默认 ~/amem-archive.log
 #   AMEM_ARCHIVE_LOCK     锁目录，默认 $TMPDIR/amem-archive.lock
 #   AMEM_ARCHIVE_RSYNC_OPTS  额外 rsync 参数，如 '-e "ssh -p 2222"'
+#   AMEM_ARCHIVE_SSH_OPTS    建远端目录时传给 ssh 的额外参数，如 '-p 2222'
 set -euo pipefail
 
 usage() {
@@ -78,6 +79,11 @@ if [[ -z "$TARGET" ]]; then
 fi
 REMOTE=0
 [[ "$TARGET" == *:* ]] && REMOTE=1
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=30)
+if [[ -n "${AMEM_ARCHIVE_SSH_OPTS:-}" ]]; then
+    # shellcheck disable=SC2206
+    SSH_OPTS+=(${AMEM_ARCHIVE_SSH_OPTS})
+fi
 
 mkdir -p "$(dirname "$LOG")"
 log() {
@@ -88,6 +94,22 @@ log() {
     else
         printf '%s\n' "$line" >>"$LOG"
     fi
+}
+
+# rsync 不会创建远端路径中的中间目录；每个源目录同步前先建好远端目标。
+if (( REMOTE )); then
+    REMOTE_HOST="${TARGET%%:*}"
+    REMOTE_BASE="${TARGET#*:}"
+    case "$REMOTE_BASE" in
+        "~/"*) REMOTE_BASE="\$HOME/${REMOTE_BASE#\~/}" ;;
+        *)     REMOTE_BASE="$(printf '%q' "$REMOTE_BASE")" ;;
+    esac
+fi
+
+ensure_remote_dir() {
+    local rel="$1"
+    ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" \
+        "mkdir -p $REMOTE_BASE/$DEVICE/$(printf '%q' "$rel")" </dev/null
 }
 
 # 防止上一轮还没跑完又启动一轮
@@ -145,6 +167,13 @@ while IFS='|' read -r label src dest; do
         continue
     fi
     dst="$TARGET/$DEVICE/$dest"
+    if (( REMOTE )) && (( ! DRY_RUN )); then
+        if ! ensure_remote_dir "$dest"; then
+            failed=1
+            log "FAIL $label -> $dst（无法创建远端目录）"
+            continue
+        fi
+    fi
     if (( ! REMOTE )) && (( ! DRY_RUN )); then
         mkdir -p "$dst"
     fi

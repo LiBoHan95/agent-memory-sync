@@ -111,10 +111,16 @@ class InstallCheckTest(unittest.TestCase):
             for rel in (".codex/AGENTS.md", ".gemini/GEMINI.md", ".pi/agent/AGENTS.md"):
                 self.assertIn("AGENT_PROTOCOL.md", (home / rel).read_text(encoding="utf-8"))
 
+            stignore = vault / ".stignore"
+            self.assertTrue(stignore.exists())
+            self.assertIn(".git", stignore.read_text(encoding="utf-8"))
+
             before = (home / ".claude" / "settings.json").read_text(encoding="utf-8")
             r = run([BASH, str(SCRIPTS / "install.sh")], env=env)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual((home / ".claude" / "settings.json").read_text(encoding="utf-8"), before)
+            self.assertEqual(stignore.read_text(encoding="utf-8"),
+                             ".git\n.DS_Store\n.dream-state\n.*.amem-tmp\n")
 
             r = run([BASH, str(SCRIPTS / "check-agents.sh")], env=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -248,6 +254,54 @@ class ArchiveScriptTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertFalse(
                 (tmp / "target" / "testmac" / "claude-code" / "p1" / "s1.jsonl").exists())
+
+    def test_remote_target_creates_destination_dirs(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            (home / ".claude" / "projects" / "p1").mkdir(parents=True)
+            (home / ".claude" / "projects" / "p1" / "s1.jsonl").write_text("x\n", encoding="utf-8")
+            # 只有 archived_sessions，没有 sessions；父目录 codex 不存在
+            (home / ".codex" / "archived_sessions").mkdir(parents=True)
+            (home / ".codex" / "archived_sessions" / "r.jsonl").write_text("z\n", encoding="utf-8")
+            (home / ".pi" / "agent" / "sessions" / "p").mkdir(parents=True)
+            (home / ".pi" / "agent" / "sessions" / "p" / "s.jsonl").write_text("p\n", encoding="utf-8")
+
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            ssh_log = tmp / "ssh.log"
+            rsync_log = tmp / "rsync.log"
+            # 模拟会读 stdin 的 ssh：如果脚本没把 stdin 重定向，会吞掉 while read 的后续行
+            ssh = bindir / "ssh"
+            ssh.write_text(
+                "#!/bin/sh\n"
+                "cat >/dev/null\n"
+                "printf '%s\\n' \"$*\" >> \"$SSH_LOG\"\n", encoding="utf-8")
+            ssh.chmod(0o755)
+            rsync = bindir / "rsync"
+            rsync.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >> \"$RSYNC_LOG\"\n", encoding="utf-8")
+            rsync.chmod(0o755)
+
+            env = self._env(tmp, home)
+            env.update({
+                "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+                "AMEM_ARCHIVE_TARGET": "server:~/transcript-archive",
+                "AMEM_ARCHIVE_SSH_OPTS": "-p 2222",
+                "SSH_LOG": str(ssh_log),
+                "RSYNC_LOG": str(rsync_log),
+            })
+            r = run([BASH, str(SCRIPTS / "archive-transcripts.sh")], env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+            ssh_calls = ssh_log.read_text(encoding="utf-8").splitlines()
+            self.assertTrue(any(
+                "mkdir -p $HOME/transcript-archive/testmac/codex/archived_sessions" in line
+                for line in ssh_calls), ssh_calls)
+            self.assertTrue(all("-p 2222" in line for line in ssh_calls), ssh_calls)
+            rsync_calls = rsync_log.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(rsync_calls), 3, rsync_calls)
 
     def test_missing_target_fails(self):
         with tempfile.TemporaryDirectory() as td:

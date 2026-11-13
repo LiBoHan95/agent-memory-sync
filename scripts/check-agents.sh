@@ -122,7 +122,7 @@ else
     if [[ "$(uname -s)" == "Darwin" ]]; then
         plist="$HOME/Library/LaunchAgents/io.github.amem.archive.plist"
         if [[ -f "$plist" ]]; then ok "launchd plist 存在"; else warn "launchd plist 不存在: $plist"; fi
-        if launchctl list 2>/dev/null | grep -q 'io.github.amem.archive'; then
+        if [[ "$(launchctl list 2>/dev/null)" == *"io.github.amem.archive"* ]]; then
             ok "launchd 已加载"
         else
             warn "launchd 未加载"

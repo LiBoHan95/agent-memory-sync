@@ -89,6 +89,18 @@ python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1
     exit 1
 }
 
+# ---------- Syncthing 忽略规则 ----------
+# .stignore 不参与同步，每台设备都需要各自创建。
+STIGNORE="$VAULT/.stignore"
+if [[ ! -f "$STIGNORE" ]]; then
+    if (( DRY_RUN )); then
+        plan "创建 $STIGNORE（Syncthing 忽略规则）"
+    else
+        printf '.git\n.DS_Store\n.dream-state\n.*.amem-tmp\n' >"$STIGNORE"
+        say "已创建: $STIGNORE"
+    fi
+fi
+
 say "vault: $VAULT"
 say "agents: $AGENTS"
 (( DRY_RUN )) && say "模式: dry-run（不写文件）"
