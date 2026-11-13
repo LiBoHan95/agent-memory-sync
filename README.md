@@ -24,6 +24,7 @@ docs/
   compatibility.md      资产划分与长期兼容规则
   web.md                服务器只读 Web
   roadmap.md            分期计划
+.cnb.yml                CNB 流水线：push / PR 时跑测试
 amem/                   核心 Python 包（只依赖标准库）
   format.py             记忆文件格式：frontmatter 与 vault 校验、log 读写
   gate.py               写回闸门：A/B/C/拒绝分级、密钥扫描、校验后写回

@@ -1,0 +1,21 @@
+# CNB 云原生构建：push / PR 时跑单元测试。
+# 项目没有构建产物，这里只做 CI 质量门禁，不产出镜像或安装包。
+main:
+  push:
+    - name: test
+      docker:
+        image: python:3.12
+      stages:
+        - name: unit-tests
+          script:
+            - python3 -m compileall -q amem tests
+            - python3 -m unittest discover -s tests -t .
+  pull_request:
+    - name: test
+      docker:
+        image: python:3.12
+      stages:
+        - name: unit-tests
+          script:
+            - python3 -m compileall -q amem tests
+            - python3 -m unittest discover -s tests -t .
