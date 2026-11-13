@@ -94,7 +94,8 @@ class InstallCheckTest(unittest.TestCase):
             (home / ".claude" / "settings.json").write_text(
                 '{\n  "theme": "dark"\n}\n', encoding="utf-8")
             vault = make_vault(tmp)
-            env = {"HOME": str(home), "AMEM_VAULT": str(vault), "AMEM_PROJECT_ROOTS": ""}
+            env = {"HOME": str(home), "AMEM_VAULT": str(vault),
+                   "AMEM_PROJECT_ROOTS": "", "AMEM_SKIP_SCHEDULER": "1"}
 
             r = run([BASH, str(SCRIPTS / "install.sh")], env=env)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -117,6 +118,12 @@ class InstallCheckTest(unittest.TestCase):
 
             r = run([BASH, str(SCRIPTS / "check-agents.sh")], env=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+            if sys.platform == "darwin":
+                plist = home / "Library" / "LaunchAgents" / "io.github.amem.archive.plist"
+                self.assertTrue(plist.exists())
+                self.assertIn(str(SCRIPTS / "archive-transcripts.sh"),
+                              plist.read_text(encoding="utf-8"))
 
     def test_check_reports_missing_vault(self):
         with tempfile.TemporaryDirectory() as td:
@@ -182,6 +189,80 @@ class DreamScriptTest(unittest.TestCase):
             self.assertIn("ok · 报告", (tmp / "dream.log").read_text(encoding="utf-8"))
             reports = list((tmp / "dream-reports").glob("*.md"))
             self.assertEqual(len(reports), 1)
+
+
+class ArchiveScriptTest(unittest.TestCase):
+    def _env(self, tmp: Path, home: Path, **extra: str) -> dict[str, str]:
+        env = {
+            "HOME": str(home),
+            "AMEM_DEVICE": "testmac",
+            "AMEM_ARCHIVE_TARGET": str(tmp / "target"),
+            "AMEM_ARCHIVE_LOG": str(tmp / "archive.log"),
+            "AMEM_ARCHIVE_LOCK": str(tmp / "lock"),
+            "AMEM_ARCHIVE_CONFIG": str(tmp / "no.env"),
+        }
+        env.update(extra)
+        return env
+
+    def test_archive_local_target_without_delete(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            src = home / ".claude" / "projects" / "p1"
+            src.mkdir(parents=True)
+            (src / "s1.jsonl").write_text('{"type":"user"}\n', encoding="utf-8")
+            (home / ".claude" / "transcripts").mkdir()
+            (home / ".claude" / "transcripts" / "old.jsonl").write_text("o\n", encoding="utf-8")
+            (home / ".codex" / "sessions" / "2026").mkdir(parents=True)
+            (home / ".codex" / "sessions" / "2026" / "r.jsonl").write_text("x\n", encoding="utf-8")
+            (home / ".codex" / "archived_sessions").mkdir()
+            (home / ".codex" / "archived_sessions" / "r.jsonl.zst").write_text("z\n", encoding="utf-8")
+            (home / ".pi" / "agent" / "sessions" / "p").mkdir(parents=True)
+            (home / ".pi" / "agent" / "sessions" / "p" / "s.jsonl").write_text("p\n", encoding="utf-8")
+
+            r = run([BASH, str(SCRIPTS / "archive-transcripts.sh")], env=self._env(tmp, home))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+            base = tmp / "target" / "testmac"
+            self.assertTrue((base / "claude-code" / "p1" / "s1.jsonl").exists())
+            self.assertTrue((base / "claude-code" / "transcripts" / "old.jsonl").exists())
+            self.assertTrue((base / "codex" / "2026" / "r.jsonl").exists())
+            self.assertTrue((base / "codex" / "archived_sessions" / "r.jsonl.zst").exists())
+            self.assertTrue((base / "pi" / "p" / "s.jsonl").exists())
+
+            # 本地删除后，归档保留（rsync 不带 --delete）
+            (src / "s1.jsonl").unlink()
+            r = run([BASH, str(SCRIPTS / "archive-transcripts.sh")], env=self._env(tmp, home))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertTrue((base / "claude-code" / "p1" / "s1.jsonl").exists())
+
+    def test_dry_run_does_not_copy(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            src = home / ".claude" / "projects" / "p1"
+            src.mkdir(parents=True)
+            (src / "s1.jsonl").write_text("x\n", encoding="utf-8")
+            r = run([BASH, str(SCRIPTS / "archive-transcripts.sh"), "--dry-run"],
+                    env=self._env(tmp, home))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertFalse(
+                (tmp / "target" / "testmac" / "claude-code" / "p1" / "s1.jsonl").exists())
+
+    def test_missing_target_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            home.mkdir()
+            env = {
+                "HOME": str(home),
+                "AMEM_ARCHIVE_CONFIG": str(tmp / "no.env"),
+                "AMEM_ARCHIVE_TARGET": "",
+                "AMEM_ARCHIVE_HOST": "",
+            }
+            r = run([BASH, str(SCRIPTS / "archive-transcripts.sh")], env=env)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("未配置归档目标", r.stderr)
 
 
 if __name__ == "__main__":

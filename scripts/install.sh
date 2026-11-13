@@ -175,10 +175,50 @@ for root in ${AMEM_PROJECT_ROOTS:-$HOME/dev $HOME/workspace $HOME/projects}; do
 done
 
 # ---------- 归档定时任务 ----------
-if [[ -x "$REPO/scripts/archive-transcripts.sh" ]]; then
-    say "归档脚本已存在：请按 docs/edge-interfaces.md §3 配置 launchd/cron（install.sh 暂不自动安装）"
+ARCHIVE_SCRIPT="$REPO/scripts/archive-transcripts.sh"
+if [[ -x "$ARCHIVE_SCRIPT" ]]; then
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        TEMPLATE="$REPO/scripts/launchd/io.github.amem.archive.plist.template"
+        PLIST="$HOME/Library/LaunchAgents/io.github.amem.archive.plist"
+        if [[ ! -f "$TEMPLATE" ]]; then
+            say "警告: 缺少 ${TEMPLATE}，跳过 launchd 安装"
+        elif (( DRY_RUN )); then
+            plan "渲染 $PLIST 并 launchctl load（每小时）"
+        else
+            mkdir -p "$HOME/Library/LaunchAgents"
+            [[ -f "$PLIST" ]] && backup "$PLIST"
+            sed -e "s|__SCRIPT__|$ARCHIVE_SCRIPT|g" \
+                -e "s|__LOG__|$HOME/amem-archive.log|g" \
+                "$TEMPLATE" >"$PLIST"
+            if [[ "${AMEM_SKIP_SCHEDULER:-0}" == "1" ]]; then
+                say "已写入 ${PLIST}（AMEM_SKIP_SCHEDULER=1，未加载）"
+            else
+                launchctl unload "$PLIST" >/dev/null 2>&1 || true
+                if launchctl load "$PLIST" >/dev/null 2>&1; then
+                    say "已安装并加载 launchd 任务: ${PLIST}（每小时）"
+                else
+                    say "已写入 ${PLIST}，但 launchctl load 失败，请手动加载"
+                fi
+            fi
+        fi
+    elif command -v crontab >/dev/null 2>&1; then
+        if [[ "${AMEM_SKIP_SCHEDULER:-0}" == "1" ]]; then
+            say "AMEM_SKIP_SCHEDULER=1，未修改 crontab"
+        elif crontab -l 2>/dev/null | grep -qF "$ARCHIVE_SCRIPT"; then
+            say "cron 归档任务已存在"
+        elif (( DRY_RUN )); then
+            plan "向 crontab 添加每小时任务: $ARCHIVE_SCRIPT"
+        else
+            (crontab -l 2>/dev/null; echo "0 * * * * $ARCHIVE_SCRIPT") | crontab -
+            say "已安装 cron 归档任务（每小时）"
+        fi
+    else
+        say "未找到 crontab，请手动配置归档定时任务"
+    fi
+    say "归档目标写入 ~/.config/amem/archive.env，例如:"
+    say "  AMEM_ARCHIVE_HOST=user@server"
 else
-    say "跳过归档定时任务: scripts/archive-transcripts.sh 尚未提供"
+    say "跳过归档定时任务: $ARCHIVE_SCRIPT 尚未提供"
 fi
 
 say ""

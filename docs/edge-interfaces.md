@@ -27,8 +27,9 @@
 ## 3. `scripts/archive-transcripts.sh` + launchd/cron
 
 - rsync 单向推到 `server:~/transcript-archive/<hostname -s>/<agent>/`，用 `rsync -a`，**不加 `--delete`**，也不加 `--ignore-existing`（转录会持续追加，变长的文件要重新同步）。
-- 源：`~/.claude/projects/` → `claude-code/`，`~/.codex/sessions/` → `codex/`，`~/.pi/agent/sessions/` → `pi/`。
-- 每小时一次（macOS 用 launchd plist，Linux 用 cron）。失败只记日志，不弹窗。
+- 源：`~/.claude/projects/` → `claude-code/`，`~/.claude/transcripts/` → `claude-code/transcripts/`，`~/.codex/sessions/` → `codex/`，`~/.codex/archived_sessions/` → `codex/archived_sessions/`，`~/.pi/agent/sessions/` → `pi/`。
+- 目标从 `~/.config/amem/archive.env` 或环境变量读取（`AMEM_ARCHIVE_HOST` / `AMEM_ARCHIVE_TARGET`）。
+- 每小时一次：macOS 由 `install.sh` 渲染并加载 `scripts/launchd/io.github.amem.archive.plist`，Linux 写入 cron。失败只记日志，不弹窗。
 - 详见 `docs/transcript-archive.md`。
 
 ## 4. `scripts/dream.sh`（服务器 cron 入口）
@@ -55,7 +56,7 @@ cd ~/agent-memory-sync && python3 -m amem.dream --vault ~/memory-vault --archive
 - 检查 `~/memory-vault` 存在（Syncthing 已同步）。
 - 各 agent 的指令文件里加入协议引用，具体写法见 `docs/agent-integration.md`；已存在就跳过。
 - `~/.claude/settings.json` 设 `cleanupPeriodDays: 36500`，并把 vault 加入 `permissions.additionalDirectories`（用 JSON 解析修改，不要 sed）。
-- 归档脚本就绪后安装归档定时任务（当前 `install.sh` 会检测并跳过）。
+- 归档脚本就绪后安装归档定时任务（macOS launchd / Linux cron）；归档目标由 `~/.config/amem/archive.env` 提供。
 - 不读取、不复制任何 agent 配置里的密钥。
 
 ## 7. `scripts/check-agents.sh`

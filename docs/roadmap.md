@@ -11,7 +11,8 @@
 - [ ] 迁移现有记忆：`~/.claude/CLAUDE.md`、`~/.claude/projects/*/memory/`、`~/.codex/memories` 里关于用户的内容
 - [ ] 服务器部署 Syncthing + 自动提交（`setup-server.md`）
 - [ ] 服务器建 `~/transcript-archive`，定加密方案（`transcript-archive.md`）
-- [ ] `scripts/archive-transcripts.sh` + launchd，本机转录首次全量上传（约 2.3G jsonl）
+- [x] `scripts/archive-transcripts.sh` + launchd/cron（`install.sh` 自动安装）
+- [ ] 本机转录首次全量上传（约 2.4G jsonl）
 - [ ] 本机接入 Claude Code、Codex、Gemini、Pi、Cursor（`agent-integration.md`）
 - [x] `scripts/install.sh`：新设备接入（协议引用、cleanupPeriodDays、additionalDirectories）
 - [x] `scripts/check-agents.sh`：检查各 agent 是否已接入

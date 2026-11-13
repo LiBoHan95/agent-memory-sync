@@ -32,10 +32,10 @@ amem/                   核心 Python 包（只依赖标准库）
   prompts/dreaming.md   给整理 agent 的指令
 tests/                  测试：python3 -m unittest discover -s tests -t .
 vault-template/         vault 初始模板，部署时复制到 ~/memory-vault
-scripts/                运维脚本（自动提交、dreaming 入口、设备接入、状态检查）
+scripts/                运维脚本（自动提交、转录归档、dreaming 入口、设备接入、状态检查）
 ```
 
 ## 状态
 
 第一期文档与 vault 模板、第二期核心代码已完成，见 [docs/roadmap.md](docs/roadmap.md)。
-待补：转录归档脚本、Codex / Pi 解析器、各设备接入与服务器部署。
+待补：Codex / Pi 解析器、各设备接入与服务器部署。

@@ -22,14 +22,17 @@
 ```
 设备                                     服务器
 ~/.claude/projects/**/*.jsonl  ──rsync──▶ ~/transcript-archive/<设备>/claude-code/
+~/.claude/transcripts/         ──rsync──▶ ~/transcript-archive/<设备>/claude-code/transcripts/
 ~/.codex/sessions/             ──rsync──▶ ~/transcript-archive/<设备>/codex/
+~/.codex/archived_sessions/    ──rsync──▶ ~/transcript-archive/<设备>/codex/archived_sessions/
 ~/.pi/agent/sessions/          ──rsync──▶ ~/transcript-archive/<设备>/pi/
 ```
 
 - **单向、只增。** 用 `rsync`，不带 `--delete`。本地被 agent 清理掉的文件在服务器上保留。不用 Syncthing，因为它会把删除同步过去。
 - **与 vault 分开。** 归档不同步回任何设备，不注入任何 agent。只有服务器上的 dreaming 和重新提炼会读它。
 - **原样保存。** 不改写，不转换格式。
-- **定时运行。** macOS 用 launchd 每小时一次（`scripts/archive-transcripts.sh` + `scripts/launchd/*.plist`，待写）。
+- **定时运行。** macOS 用 launchd 每小时一次（`scripts/archive-transcripts.sh` + `scripts/launchd/`；`scripts/install.sh` 会渲染并加载 plist，Linux 写入 cron）。
+- **归档目标。** 写在 `~/.config/amem/archive.env`（`AMEM_ARCHIVE_HOST=user@server`，或直接用 `AMEM_ARCHIVE_TARGET` 指定本地/远端路径）。首次全量上传前可先 `scripts/archive-transcripts.sh --dry-run`。
 - **本地兜底。** `install.sh` 把 Claude Code 的 `cleanupPeriodDays` 设为 `36500`。注意 issue #90148：项目级 `.claude/settings.json` 里的该值会覆盖全局清理行为，install 时一并检查。
 
 ## 敏感信息

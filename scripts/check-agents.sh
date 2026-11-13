@@ -121,7 +121,7 @@ if [[ ! -x "$REPO/scripts/archive-transcripts.sh" ]]; then
 else
     if [[ "$(uname -s)" == "Darwin" ]]; then
         plist="$HOME/Library/LaunchAgents/io.github.amem.archive.plist"
-        if [[ -f "$plist" ]]; then ok "launchd plist 存在"; else bad "launchd plist 不存在: $plist"; fi
+        if [[ -f "$plist" ]]; then ok "launchd plist 存在"; else warn "launchd plist 不存在: $plist"; fi
         if launchctl list 2>/dev/null | grep -q 'io.github.amem.archive'; then
             ok "launchd 已加载"
         else
@@ -131,7 +131,7 @@ else
         if crontab -l 2>/dev/null | grep -q 'archive-transcripts.sh'; then
             ok "cron 已配置"
         else
-            bad "cron 未配置"
+            warn "cron 未配置"
         fi
     fi
     log="$HOME/amem-archive.log"
