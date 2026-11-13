@@ -38,7 +38,7 @@ cd ~/agent-memory-sync && python3 -m amem.dream --vault ~/memory-vault --archive
 ```
 
 - 运行前检查 `gitleaks` 和 `claude` 在 PATH 上；缺 gitleaks 时 `amem.dream` 本身也会拒绝写回。
-- 退出码非 0 时发通知（方式待定）。报告在 `~/dream-reports/`。
+- 失败时尝试 `notify-send` / `osascript` / `logger` 发通知。报告在 `~/dream-reports/`，日志默认 `~/dream.log`。
 - 环境变量：`AMEM_VAULT`、`AMEM_ARCHIVE`、`AMEM_AGENT_CMD`（默认 `claude -p {prompt} ...`，`{prompt}` 必须是独立参数）、`AMEM_AGENT_TIMEOUT`、`AMEM_BUDGET_CHARS`。
 - 必须和每小时自动提交错开（例如自动提交在整点，dreaming 在 04:30）。
 
@@ -54,8 +54,8 @@ cd ~/agent-memory-sync && python3 -m amem.dream --vault ~/memory-vault --archive
 
 - 检查 `~/memory-vault` 存在（Syncthing 已同步）。
 - 各 agent 的指令文件里加入协议引用，具体写法见 `docs/agent-integration.md`；已存在就跳过。
-- `~/.claude/settings.json` 设 `cleanupPeriodDays: 36500`（用 JSON 解析修改，不要 sed）。
-- 安装归档定时任务。
+- `~/.claude/settings.json` 设 `cleanupPeriodDays: 36500`，并把 vault 加入 `permissions.additionalDirectories`（用 JSON 解析修改，不要 sed）。
+- 归档脚本就绪后安装归档定时任务（当前 `install.sh` 会检测并跳过）。
 - 不读取、不复制任何 agent 配置里的密钥。
 
 ## 7. `scripts/check-agents.sh`

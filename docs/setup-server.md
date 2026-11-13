@@ -55,7 +55,7 @@ brew services start syncthing
 ```bash
 crontab -e
 # 每小时提交一次变化
-0 * * * * cd ~/memory-vault && git add -A && git diff --cached --quiet || git commit -qm "auto: $(date -Iseconds)"
+0 * * * * ~/agent-memory-sync/scripts/autocommit.sh
 ```
 
 需要异地备份时，加一个私有远程仓库并在 cron 里 `git push`。

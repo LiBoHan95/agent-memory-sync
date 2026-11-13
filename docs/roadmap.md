@@ -13,16 +13,18 @@
 - [ ] 服务器建 `~/transcript-archive`，定加密方案（`transcript-archive.md`）
 - [ ] `scripts/archive-transcripts.sh` + launchd，本机转录首次全量上传（约 2.3G jsonl）
 - [ ] 本机接入 Claude Code、Codex、Gemini、Pi、Cursor（`agent-integration.md`）
-- [ ] `scripts/install.sh`：新设备一键接入（含 cleanupPeriodDays、归档定时任务）
-- [ ] `scripts/check-agents.sh`：检查各 agent 是否已接入
+- [x] `scripts/install.sh`：新设备接入（协议引用、cleanupPeriodDays、additionalDirectories）
+- [x] `scripts/check-agents.sh`：检查各 agent 是否已接入
+- [x] `scripts/autocommit.sh`：服务器每小时自动提交
 - [ ] 第二台设备接入
 - [ ] 试用两周：切换 agent/设备后偏好是否保持
 
 ## 第二期：自动整理（dreaming）
 
-- [ ] `scripts/parsers/`：Claude Code、Codex、Pi 转录解析器
-- [ ] `docs/dreaming-prompt.md`
-- [ ] `scripts/dream.sh`（含 gitleaks 校验、分级提交）
+- [x] `amem/parsers/claude_code.py`
+- [ ] `amem/parsers/codex.py`、`amem/parsers/pi.py`
+- [x] `amem/prompts/dreaming.md`
+- [x] `scripts/dream.sh`（调用 `amem.dream`，前置检查 gitleaks/claude）
 - [ ] 先手动运行几次，评估 A/B/C 三级产出质量
 - [ ] 上 cron，每天一次
 - [ ] 跟踪提案接受率，决定是否放宽分级

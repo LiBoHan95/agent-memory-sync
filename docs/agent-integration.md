@@ -2,6 +2,8 @@
 
 目标：每个 agent 启动时都加载 `~/memory-vault/AGENT_PROTOCOL.md`，并能读写 `~/memory-vault/`。
 
+接入可以用 `scripts/install.sh` 自动完成（幂等，改配置前备份为 `<文件>.bak.<日期>`）；下面是不用脚本时的手动步骤。
+
 支持文件引用的 agent 用引用；不支持的用一行指示让 agent 自己去读。
 
 ## Claude Code

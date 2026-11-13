@@ -1,0 +1,6 @@
+.DS_Store
+.stfolder/
+.stversions/
+.dream-state
+.dream-state.tmp
+.*.amem-tmp

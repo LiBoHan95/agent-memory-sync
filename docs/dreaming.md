@@ -25,14 +25,14 @@ C 级不自动的原因：这两个目录会注入每个 agent 的每次会话�
 ## 流程
 
 1. **收集**：取上次运行（记录在 `.dream-state`）之后的新 log 和新转录。都为空则退出。
-2. **解析**：用 `scripts/parsers/` 把各 agent 的转录转成统一的"用户说了什么、agent 做了什么"文本，只看用户消息和纠正。
+2. **解析**：用 `amem/parsers/` 把各 agent 的转录转成统一的"用户说了什么、agent 做了什么"文本，只看用户消息和纠正。
 3. **提炼**：headless agent 读取材料，对照现有笔记，产出 A/B/C 三类变更。
 4. **校验**：
    - 所有改动过 `gitleaks`，命中则丢弃该条并记入报告。
    - frontmatter 字段检查，不符合 `FORMAT.md` 的丢弃。
    - `MEMORY.md` 超 200 行则回到第 3 步，要求下沉细节。
-5. **应用**：A、B 级提交 git（每类一个 commit，message 以 `dream:` 开头）；C 级写 `proposals/YYYY-MM-DD.md`。
-6. **报告**：`proposals/YYYY-MM-DD.md` 头部附本次摘要：处理了多少 log、改了什么、哪些被丢弃、B 级 commit 的哈希。
+5. **应用**：A 级一个 commit，B 级每条一个独立 commit（message 以 `dream:` 开头）；C 级写 `proposals/YYYY-MM-DD.md`。
+6. **报告**：写到 `~/dream-reports/YYYY-MM-DD-HHMMSS.md`（可用 `Config.report_dir` 改），包含本次摘要、A/B/C/拒绝明细和 agent 输出末尾。
 
 ## 确认提案
 
@@ -43,21 +43,14 @@ C 级不自动的原因：这两个目录会注入每个 agent 的每次会话�
 服务器 cron，每天一次：
 
 ```bash
-0 4 * * * ~/agent-memory-sync/scripts/dream.sh >> ~/dream.log 2>&1
+30 4 * * * ~/agent-memory-sync/scripts/dream.sh
 ```
 
-`dream.sh`（待写）调用 headless agent：
+`scripts/dream.sh` 先检查 `gitleaks`、`claude`、vault 和归档目录，再调用 `python3 -m amem.dream`；日志默认写 `~/dream.log`，失败时尝试 `notify-send` / `osascript` / `logger` 通知。
 
-```bash
-claude -p "$(cat ~/agent-memory-sync/docs/dreaming-prompt.md)" \
-  --permission-mode acceptEdits \
-  --allowedTools "Read,Write,Edit,Glob,Grep" \
-  --output-format json
-```
-
-- 工作目录为 vault，转录归档以只读方式提供。
-- 不给 Bash 权限；git 提交、gitleaks 校验由 `dream.sh` 在 agent 结束后执行。
-- 也可换成 `codex exec`，dreaming 不依赖特定 agent。
+- agent 的工作目录是 vault 的临时副本，增量材料在 `input.md`；agent 改不到真实 vault。
+- 不给 agent Bash 权限；git 提交、gitleaks 校验由 `amem.gate` 在 agent 结束后执行。
+- 可用 `AMEM_AGENT_CMD` 换成 `codex exec` 等，dreaming 不依赖特定 agent。
 
 ## 成本
 
@@ -65,8 +58,7 @@ claude -p "$(cat ~/agent-memory-sync/docs/dreaming-prompt.md)" \
 - 转录先经解析器过滤，只保留用户消息和 agent 被纠正前后的片段，体积通常降到原来的几十分之一。
 - 用便宜的模型做提炼；C 级提案量少，可以用强模型复核。
 
-## 待写
+## 待补
 
-- `docs/dreaming-prompt.md`：给 headless agent 的指令
-- `scripts/dream.sh`
-- `scripts/parsers/claude_code.py`、`codex.py`、`pi.py`
+- `scripts/archive-transcripts.sh`：转录归档仍是最优先的缺口
+- `amem/parsers/codex.py`、`amem/parsers/pi.py`
