@@ -1,4 +1,5 @@
 ---
+schema_version: 1
 name: user-preferences
 description: 用户偏好：语言、沟通风格、工具链
 type: preference

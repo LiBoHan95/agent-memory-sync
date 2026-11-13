@@ -1,4 +1,5 @@
 ---
+schema_version: 1
 name: user-profile
 description: 用户是谁：身份、角色、设备、常驻项目
 type: profile

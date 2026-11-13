@@ -2,11 +2,14 @@
 
 ## 通用规则
 
+当前格式版本：`schema_version: 1`。兼容规则见 `docs/compatibility.md`：只增字段，不改名、不改含义；破坏性变更必须升版本并附迁移脚本。
+
 - 一个文件一个主题。规则类一条一个文件。
 - 文件头用 YAML frontmatter：
 
 ```markdown
 ---
+schema_version: 1
 name: prefer-chinese-replies
 description: 所有回答用中文
 type: preference        # profile | preference | rule | project | reference

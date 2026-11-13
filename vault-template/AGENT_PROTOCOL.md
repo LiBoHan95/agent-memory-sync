@@ -19,6 +19,12 @@
 - `profile/`、`rules/`、`MEMORY.md` 只有在用户明确同意后才能修改。用户说"记住……"即视为同意。
 - 修改已有条目时更新 `updated` 和 `source`；事实被推翻时标 `status: superseded` 并填 `superseded_by`，不要删除。
 
+## 整理提案
+
+服务器每天自动整理记忆。涉及 `profile/`、`rules/` 的变更写在 `~/memory-vault/proposals/` 里等用户确认。
+- 会话开始时如果有未处理的提案，用一句话提醒用户，不展开。
+- 用户要求处理时，逐条展示，按用户决定应用，并在提案文件里标注每条的结果（accepted / rejected）。
+
 ## 禁止
 
 不写入密码、API key、token、cookie、私钥、客户个人信息。发现 vault 里有这类内容，告诉用户。

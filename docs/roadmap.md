@@ -1,29 +1,37 @@
 # 分期计划
 
-## 第一期：共享 vault（当前）
+## 第一期：共享 vault + 转录归档（当前）
 
-- [x] 架构、格式规范、协议文档
-- [x] vault 模板
+转录归档放在第一期：Claude Code 默认删除 30 天前的转录，晚一天做就多丢一天。
+
+- [x] 架构、格式规范、协议、兼容规则文档
+- [x] vault 模板（含 `schema_version`）
+- [ ] **立即**：本机 `~/.claude/settings.json` 设 `cleanupPeriodDays: 36500`，止住转录删除
 - [ ] 补全 `profile/USER.md`（身份、设备清单）
 - [ ] 迁移现有记忆：`~/.claude/CLAUDE.md`、`~/.claude/projects/*/memory/`、`~/.codex/memories` 里关于用户的内容
-- [ ] 服务器部署 Syncthing + 自动提交（`docs/setup-server.md`）
-- [ ] 本机接入 Claude Code、Codex、Gemini、Pi、Cursor（`docs/agent-integration.md`）
-- [ ] `scripts/install.sh`：在新设备上一键写入各 agent 的引用
+- [ ] 服务器部署 Syncthing + 自动提交（`setup-server.md`）
+- [ ] 服务器建 `~/transcript-archive`，定加密方案（`transcript-archive.md`）
+- [ ] `scripts/archive-transcripts.sh` + launchd，本机转录首次全量上传（约 2.3G jsonl）
+- [ ] 本机接入 Claude Code、Codex、Gemini、Pi、Cursor（`agent-integration.md`）
+- [ ] `scripts/install.sh`：新设备一键接入（含 cleanupPeriodDays、归档定时任务）
 - [ ] `scripts/check-agents.sh`：检查各 agent 是否已接入
 - [ ] 第二台设备接入
 - [ ] 试用两周：切换 agent/设备后偏好是否保持
 
-## 第二期：dreaming
+## 第二期：自动整理（dreaming）
 
-- [ ] `scripts/dream.sh`
-- [ ] 第一次手动运行，评估提案质量
-- [ ] 上 cron
+- [ ] `scripts/parsers/`：Claude Code、Codex、Pi 转录解析器
+- [ ] `docs/dreaming-prompt.md`
+- [ ] `scripts/dream.sh`（含 gitleaks 校验、分级提交）
+- [ ] 先手动运行几次，评估 A/B/C 三级产出质量
+- [ ] 上 cron，每天一次
+- [ ] 跟踪提案接受率，决定是否放宽分级
 
 ## 第三期：检索层（按需）
 
 触发条件：`projects/` 和 log 多到靠索引找不到东西。
 
-- [ ] 在服务器上部署 Hindsight 或 mem0（MCP 方式），只索引 vault
+- [ ] 在服务器上部署 Hindsight 或 mem0（MCP 方式），只索引 vault 和转录归档
 - [ ] 各 agent 加 MCP 连接
 - [ ] 对比有无检索层的效果，再决定是否保留
 
