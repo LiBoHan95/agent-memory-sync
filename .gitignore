@@ -4,3 +4,4 @@
 *.sync-conflict-*
 .env
 __pycache__/
+.deja/
