@@ -26,7 +26,7 @@
 
 ## 3. `scripts/archive-transcripts.sh` + launchd/cron
 
-- rsync 单向推到 `server:~/transcript-archive/<hostname -s>/<agent>/`，**不加 `--delete`**，加 `--ignore-existing` 以外的增量参数（转录会追加，需同步变长的文件）。
+- rsync 单向推到 `server:~/transcript-archive/<hostname -s>/<agent>/`，用 `rsync -a`，**不加 `--delete`**，也不加 `--ignore-existing`（转录会持续追加，变长的文件要重新同步）。
 - 源：`~/.claude/projects/` → `claude-code/`，`~/.codex/sessions/` → `codex/`，`~/.pi/agent/sessions/` → `pi/`。
 - 每小时一次（macOS 用 launchd plist，Linux 用 cron）。失败只记日志，不弹窗。
 - 详见 `docs/transcript-archive.md`。
