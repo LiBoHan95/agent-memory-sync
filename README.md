@@ -23,10 +23,19 @@ docs/
   transcript-archive.md 转录归档
   compatibility.md      资产划分与长期兼容规则
   roadmap.md            分期计划
+amem/                   核心 Python 包（只依赖标准库）
+  format.py             记忆文件格式：frontmatter 与 vault 校验、log 读写
+  gate.py               写回闸门：A/B/C/拒绝分级、密钥扫描、校验后写回
+  dream.py              dreaming 主流程：收集增量 → headless agent → 闸门 → 报告
+  parsers/              各 agent 转录解析器（目前只有 Claude Code）
+  screen.py             可选的转录预筛
+  prompts/dreaming.md   给整理 agent 的指令
+tests/                  测试：python3 -m unittest discover -s tests -t .
 vault-template/         vault 初始模板，部署时复制到 ~/memory-vault
-scripts/                安装与维护脚本（待写）
+scripts/                运维脚本（归档、定时任务、安装、检查；待写）
 ```
 
 ## 状态
 
-第一期：文档与 vault 模板。见 [docs/roadmap.md](docs/roadmap.md)。
+第一期文档与 vault 模板、第二期核心代码已完成，见 [docs/roadmap.md](docs/roadmap.md)。
+待补：`scripts/` 下的运维脚本、Codex / Pi 转录解析器、各 agent 接入。
