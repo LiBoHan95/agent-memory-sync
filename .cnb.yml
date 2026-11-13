@@ -8,6 +8,7 @@ main:
       stages:
         - name: unit-tests
           script:
+            - apt-get update -qq && apt-get install -y -qq --no-install-recommends rsync
             - python3 -m compileall -q amem tests
             - python3 -m unittest discover -s tests -t .
   pull_request:
@@ -17,5 +18,6 @@ main:
       stages:
         - name: unit-tests
           script:
+            - apt-get update -qq && apt-get install -y -qq --no-install-recommends rsync
             - python3 -m compileall -q amem tests
             - python3 -m unittest discover -s tests -t .
