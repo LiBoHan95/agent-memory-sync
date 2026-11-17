@@ -1,6 +1,6 @@
 # agent-memory-sync
 
-让多台设备上的多个 agent（Claude Code、Codex、Cursor、Gemini、Pi 等）共享同一份关于用户的记忆：你是谁、偏好什么、在做哪些项目。
+让多台设备上的多个 agent（Claude Code、Codex、DeepSeek Harness、Cursor、Gemini、Pi 等）共享同一份关于用户的记忆：你是谁、偏好什么、在做哪些项目。
 
 ## 核心思路
 
@@ -73,7 +73,7 @@ scripts/install.sh             # 幂等，改前自动备份
 scripts/check-agents.sh        # 只读检查接入结果
 ```
 
-`install.sh` 会为 Claude Code、Codex、Gemini、Pi 写入协议引用或指示句，把 vault 加入 Claude Code 的可访问目录，并设置 `cleanupPeriodDays=36500`，避免转录被自动清理。Cursor 没有全局指令文件，需要在 Settings → Rules → User Rules 手动填入：
+`install.sh` 会为 Claude Code、Codex、DeepSeek Harness、Gemini、Pi 写入协议引用或指示句，把 vault 加入 Claude Code 的可访问目录，并设置 `cleanupPeriodDays=36500`，避免转录被自动清理。Cursor 没有全局指令文件，需要在 Settings → Rules → User Rules 手动填入：
 
 ```markdown
 开始任何任务前，先读取并遵守 ~/memory-vault/AGENT_PROTOCOL.md，再读 ~/memory-vault/MEMORY.md。

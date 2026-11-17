@@ -108,7 +108,8 @@ class InstallCheckTest(unittest.TestCase):
             self.assertIn(str(vault), settings["permissions"]["additionalDirectories"])
             self.assertTrue(list((home / ".claude").glob("settings.json.bak.*")))
 
-            for rel in (".codex/AGENTS.md", ".gemini/GEMINI.md", ".pi/agent/AGENTS.md"):
+            for rel in (".codex/AGENTS.md", ".dsh/AGENTS.md", ".gemini/GEMINI.md",
+                        ".pi/agent/AGENTS.md"):
                 self.assertIn("AGENT_PROTOCOL.md", (home / rel).read_text(encoding="utf-8"))
 
             stignore = vault / ".stignore"
@@ -223,6 +224,9 @@ class ArchiveScriptTest(unittest.TestCase):
             (home / ".codex" / "sessions" / "2026" / "r.jsonl").write_text("x\n", encoding="utf-8")
             (home / ".codex" / "archived_sessions").mkdir()
             (home / ".codex" / "archived_sessions" / "r.jsonl.zst").write_text("z\n", encoding="utf-8")
+            (home / ".dsh" / "sessions" / "p").mkdir(parents=True)
+            (home / ".dsh" / "sessions" / "p" / "session.v4.jsonl.zstd").write_text(
+                "d\n", encoding="utf-8")
             (home / ".pi" / "agent" / "sessions" / "p").mkdir(parents=True)
             (home / ".pi" / "agent" / "sessions" / "p" / "s.jsonl").write_text("p\n", encoding="utf-8")
 
@@ -234,6 +238,7 @@ class ArchiveScriptTest(unittest.TestCase):
             self.assertTrue((base / "claude-code" / "transcripts" / "old.jsonl").exists())
             self.assertTrue((base / "codex" / "2026" / "r.jsonl").exists())
             self.assertTrue((base / "codex" / "archived_sessions" / "r.jsonl.zst").exists())
+            self.assertTrue((base / "dsh" / "p" / "session.v4.jsonl.zstd").exists())
             self.assertTrue((base / "pi" / "p" / "s.jsonl").exists())
 
             # 本地删除后，归档保留（rsync 不带 --delete）

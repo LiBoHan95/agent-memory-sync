@@ -29,6 +29,16 @@ Claude Code 自带的 auto memory（`~/.claude/projects/*/memory/`）是按项�
 
 Codex 的 AGENTS.md 不支持 `@` 引用，所以用指示句。sandbox 模式下需确认 `~/memory-vault` 可写（`config.toml` 的 `sandbox_workspace_write.writable_roots`）。
 
+## DeepSeek Harness
+
+全局指令文件是 `$DSH_HOME/AGENTS.md`（默认 `~/.dsh/AGENTS.md`），写入同一句指示：
+
+```markdown
+开始任何任务前，先读取并遵守 ~/memory-vault/AGENT_PROTOCOL.md，再读 ~/memory-vault/MEMORY.md。
+```
+
+DeepSeek Harness 的 `dsh-agent-instructions` 插件会在会话开始时加载 `$DSH_HOME/AGENTS.md`，再加载项目里从根目录到当前目录的 `AGENTS.md` / `CLAUDE.md`。它不解释 `@path` 引用，所以用指示句；`DSH_HOME` 指向自定义目录时，全局文件也放在那里。
+
 ## Gemini CLI
 
 `~/.gemini/GEMINI.md`（不存在则新建）：

@@ -8,6 +8,7 @@ set -uo pipefail
 
 VAULT="${AMEM_VAULT:-$HOME/memory-vault}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 FAIL=0
 
 ok() { printf '  [ok]   %s\n' "$*"; }
@@ -110,6 +111,7 @@ done
 # ---------- 其他 agent ----------
 section "其他 agent"
 check_agent "Codex" "$HOME/.codex" "$HOME/.codex/AGENTS.md"
+check_agent "DeepSeek Harness" "$DSH_HOME" "$DSH_HOME/AGENTS.md"
 check_agent "Gemini" "$HOME/.gemini" "$HOME/.gemini/GEMINI.md"
 check_agent "Pi" "$HOME/.pi/agent" "$HOME/.pi/agent/AGENTS.md"
 warn "Cursor: 没有全局指令文件，需手动确认 Settings → Rules → User Rules"

@@ -2,13 +2,14 @@
 # 新设备接入共享记忆库。幂等，可重复运行；修改配置前备份为 <文件>.bak.<YYYY-MM-DD>。
 # 只修改本脚本列出的文件和键，不读取、不复制任何密钥。
 #
-# 用法: scripts/install.sh [--dry-run] [--vault PATH] [--agents "claude-code codex gemini pi"]
+# 用法: scripts/install.sh [--dry-run] [--vault PATH] [--agents "claude-code codex dsh gemini pi"]
 set -euo pipefail
 
 VAULT="${AMEM_VAULT:-$HOME/memory-vault}"
-AGENTS="${AMEM_AGENTS:-claude-code codex gemini pi}"
+AGENTS="${AMEM_AGENTS:-claude-code codex dsh gemini pi}"
 DRY_RUN=0
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 
 usage() {
     cat <<'EOF'
@@ -17,10 +18,10 @@ usage() {
   --dry-run         只显示要做什么，不写任何文件
   --vault PATH      记忆库路径（默认 ~/memory-vault）
   --agents "LIST"   要接入的 agent，空格分隔
-                    可选: claude-code codex gemini pi（默认全部）
+                    可选: claude-code codex dsh gemini pi（默认全部）
   -h, --help        显示本帮助
 
-环境变量: AMEM_VAULT, AMEM_AGENTS, AMEM_PROJECT_ROOTS
+环境变量: AMEM_VAULT, AMEM_AGENTS, AMEM_PROJECT_ROOTS, DSH_HOME
 EOF
 }
 
@@ -165,6 +166,9 @@ INSTRUCTION="开始任何任务前，先读取并遵守 $VAULT/AGENT_PROTOCOL.md
 
 if want codex; then
     append_block "$HOME/.codex/AGENTS.md" "AGENT_PROTOCOL.md" "$INSTRUCTION"
+fi
+if want dsh; then
+    append_block "$DSH_HOME/AGENTS.md" "AGENT_PROTOCOL.md" "$INSTRUCTION"
 fi
 if want gemini; then
     append_block "$HOME/.gemini/GEMINI.md" "AGENT_PROTOCOL.md" "@$VAULT/AGENT_PROTOCOL.md

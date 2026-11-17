@@ -14,6 +14,7 @@
 | Claude Code | `~/.claude/projects/**/*.jsonl`（702 个） | 目录共 2.5G，jsonl 占比待测 |
 | Claude Code | `~/.claude/transcripts/` | 1.1M |
 | Codex | `~/.codex/sessions/`、`~/.codex/archived_sessions/` | 14M |
+| DeepSeek Harness | `~/.dsh/sessions/**/*.jsonl.zstd` | 17M |
 | Pi | `~/.pi/agent/sessions/` | 5.6M |
 | Gemini、Cursor | 待确认 | — |
 
@@ -25,6 +26,7 @@
 ~/.claude/transcripts/         ──rsync──▶ ~/transcript-archive/<设备>/claude-code/transcripts/
 ~/.codex/sessions/             ──rsync──▶ ~/transcript-archive/<设备>/codex/
 ~/.codex/archived_sessions/    ──rsync──▶ ~/transcript-archive/<设备>/codex/archived_sessions/
+~/.dsh/sessions/               ──rsync──▶ ~/transcript-archive/<设备>/dsh/
 ~/.pi/agent/sessions/          ──rsync──▶ ~/transcript-archive/<设备>/pi/
 ```
 

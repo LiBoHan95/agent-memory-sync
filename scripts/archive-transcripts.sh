@@ -145,6 +145,7 @@ sources() {
         "claude-code-transcripts" "$HOME/.claude/transcripts"       "claude-code/transcripts" \
         "codex-sessions"         "$HOME/.codex/sessions"            "codex" \
         "codex-archived"         "$HOME/.codex/archived_sessions"   "codex/archived_sessions" \
+        "dsh-sessions"           "$HOME/.dsh/sessions"              "dsh" \
         "pi"                     "$HOME/.pi/agent/sessions"         "pi"
 }
 

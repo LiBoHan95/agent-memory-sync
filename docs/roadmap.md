@@ -13,7 +13,7 @@
 - [ ] 服务器建 `~/transcript-archive`，定加密方案（`transcript-archive.md`）
 - [x] `scripts/archive-transcripts.sh` + launchd/cron（`install.sh` 自动安装）
 - [ ] 本机转录首次全量上传（约 2.4G jsonl）
-- [ ] 本机接入 Claude Code、Codex、Gemini、Pi、Cursor（`agent-integration.md`）
+- [ ] 本机接入 Claude Code、Codex、DeepSeek Harness、Gemini、Pi、Cursor（`agent-integration.md`）
 - [x] `scripts/install.sh`：新设备接入（协议引用、cleanupPeriodDays、additionalDirectories）
 - [x] `scripts/check-agents.sh`：检查各 agent 是否已接入
 - [x] `scripts/autocommit.sh`：服务器每小时自动提交
