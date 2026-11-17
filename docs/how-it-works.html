@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-memory-sync 运行机制</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --ink: #23272e;
+    --ink-2: #5a626e;
+    --ink-3: #8a919c;
+    --line: #e3e6eb;
+    --brand: #46618f;
+    --brand-soft: #eef2f8;
+    --green: #3f7d5a;
+    --green-soft: #edf5f0;
+    --blue: #46618f;
+    --blue-soft: #eef2f8;
+    --amber: #8a6d3b;
+    --amber-soft: #f7f2e7;
+    --red: #a4493f;
+    --red-soft: #f8eeed;
+    --radius: 12px;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.7 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 48px 24px 80px; }
+  header.hero { padding: 8px 0 36px; border-bottom: 1px solid var(--line); margin-bottom: 36px; }
+  .kicker {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--brand); font-weight: 600; margin-bottom: 14px;
+  }
+  .kicker::before {
+    content: ""; width: 18px; height: 2px; background: var(--brand); border-radius: 2px;
+  }
+  h1 { font-size: 32px; line-height: 1.25; margin: 0 0 12px; letter-spacing: -0.01em; }
+  .lede { font-size: 17px; color: var(--ink-2); max-width: 760px; margin: 0 0 22px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    font-size: 12.5px; color: var(--ink-2); background: var(--card);
+    border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px;
+  }
+  .chip strong { color: var(--ink); font-weight: 600; }
+
+  nav.toc {
+    display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 0;
+  }
+  nav.toc a {
+    font-size: 13px; color: var(--ink-2); text-decoration: none;
+    border: 1px solid var(--line); background: var(--card);
+    padding: 5px 11px; border-radius: 999px;
+  }
+  nav.toc a:hover { color: var(--brand); border-color: var(--brand); }
+
+  section { margin: 0 0 44px; }
+  h2 {
+    font-size: 21px; margin: 0 0 6px; letter-spacing: -0.01em;
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2 .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 8px;
+    background: var(--brand); color: #fff; font-size: 13px; font-weight: 600;
+    flex: none;
+  }
+  .sub { color: var(--ink-2); margin: 0 0 18px; max-width: 780px; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 22px 24px;
+  }
+  .card + .card { margin-top: 14px; }
+  .card h3 {
+    font-size: 15.5px; margin: 0 0 8px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card h3 .dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--brand); flex: none;
+  }
+  .card p { margin: 0 0 10px; color: var(--ink-2); }
+  .card p:last-child { margin-bottom: 0; }
+  code {
+    font-family: var(--mono); font-size: 12.5px;
+    background: #f0f2f5; border: 1px solid var(--line);
+    border-radius: 5px; padding: 1px 6px; color: #39414d;
+  }
+  pre {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.65;
+    background: #f7f8fa; border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; overflow-x: auto; color: #39414d; margin: 10px 0 0;
+  }
+
+  .flow { display: grid; gap: 12px; }
+  .flow-row {
+    display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 10px;
+    align-items: stretch;
+  }
+  .node {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; min-width: 0;
+  }
+  .node .t { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+  .node .d { font-size: 12.5px; color: var(--ink-2); line-height: 1.55; }
+  .node.soft { background: #fbfbfc; }
+  .arrow {
+    display: flex; align-items: center; justify-content: center;
+    color: var(--ink-3); font-size: 18px; flex: none; padding: 0 2px;
+  }
+  .arrow small {
+    display: block; font-size: 10.5px; color: var(--ink-3);
+    text-align: center; line-height: 1.3; max-width: 72px;
+  }
+
+  .lane { display: grid; grid-template-columns: 132px 1fr; gap: 14px; align-items: start; }
+  .lane + .lane { margin-top: 14px; }
+  .lane-label {
+    font-size: 12.5px; font-weight: 600; color: var(--brand);
+    background: var(--brand-soft); border-radius: 8px; padding: 8px 10px;
+    text-align: center; line-height: 1.4;
+  }
+  .lane-body {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 16px; font-size: 13.5px; color: var(--ink-2);
+  }
+  .lane-body strong { color: var(--ink); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 10px 12px; vertical-align: top; border-bottom: 1px solid var(--line); }
+  th { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  td code { white-space: nowrap; }
+
+  .tier {
+    display: inline-block; font-size: 11.5px; font-weight: 700;
+    border-radius: 6px; padding: 1px 8px; letter-spacing: .02em;
+  }
+  .tier.a { color: var(--green); background: var(--green-soft); }
+  .tier.b { color: var(--blue); background: var(--blue-soft); }
+  .tier.c { color: var(--amber); background: var(--amber-soft); }
+  .tier.x { color: var(--red); background: var(--red-soft); }
+
+  ol.steps { margin: 0; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 12px; }
+  ol.steps > li {
+    counter-increment: step; position: relative;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 18px 14px 58px;
+  }
+  ol.steps > li::before {
+    content: counter(step, decimal-leading-zero);
+    position: absolute; left: 16px; top: 14px;
+    font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--brand);
+    background: var(--brand-soft); border-radius: 7px; padding: 2px 7px;
+  }
+  ol.steps .st { font-weight: 600; font-size: 14.5px; margin-bottom: 4px; }
+  ol.steps .sd { font-size: 13px; color: var(--ink-2); }
+  ol.steps .why {
+    margin-top: 8px; font-size: 12.5px; color: var(--ink-3);
+    border-left: 2px solid var(--line); padding-left: 10px;
+  }
+  ol.steps .why b { color: var(--ink-2); font-weight: 600; }
+
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+  .stat { display: flex; gap: 14px; align-items: baseline; }
+  .stat .n { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; color: var(--brand); font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 13px; color: var(--ink-2); }
+
+  .note {
+    border: 1px solid var(--line); border-left: 3px solid var(--amber);
+    background: #fffdf8; border-radius: 8px; padding: 12px 16px;
+    font-size: 13px; color: var(--ink-2);
+  }
+  .note b { color: var(--ink); }
+
+  footer {
+    margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line);
+    font-size: 12.5px; color: var(--ink-3);
+  }
+  @media (max-width: 720px) {
+    .flow-row { grid-template-columns: 1fr; }
+    .arrow { padding: 2px 0; }
+    .arrow small { max-width: none; }
+    .lane { grid-template-columns: 1fr; }
+    h1 { font-size: 26px; }
+  }
+  @media print {
+    body { background: #fff; }
+    .wrap { padding: 0; max-width: none; }
+    nav.toc { display: none; }
+    .card, ol.steps > li { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="kicker">agent-memory-sync</div>
+  <h1>这套系统到底怎么运行</h1>
+  <p class="lede">
+    一句话：每个 agent 在会话开始时读同一份记忆，在会话中把值得记住的东西写回去；
+    服务器负责同步、存档和每天自动整理。下面按「谁在什么时候做什么」拆开讲。
+  </p>
+  <div class="chips">
+    <span class="chip">当前阶段 <strong>第一期</strong></span>
+    <span class="chip">vault <strong>11 个记忆文件</strong></span>
+    <span class="chip">转录已归档 <strong>2.6G</strong></span>
+    <span class="chip">接入 agent <strong>5 个</strong></span>
+    <span class="chip">更新 <strong>2026-11-17</strong></span>
+  </div>
+  <nav class="toc">
+    <a href="#arch">整体架构</a>
+    <a href="#clock">一天里的自动动作</a>
+    <a href="#vault">vault 里有什么</a>
+    <a href="#dreaming">dreaming 七步</a>
+    <a href="#gate">闸门 A/B/C</a>
+    <a href="#agents">agent 如何接入</a>
+    <a href="#status">当前状态</a>
+  </nav>
+</header>
+
+<section id="arch">
+  <h2><span class="num">1</span>整体架构：三块东西在转</h2>
+  <p class="sub">
+    你的设备、服务器、以及跑在服务器上的自动任务。设备之间不直接通信，全部经过服务器上的 vault。
+  </p>
+  <div class="flow">
+    <div class="flow-row">
+      <div class="node">
+        <div class="t">你的设备</div>
+        <div class="d">
+          Claude Code、Codex、DSH、Gemini、Pi 等 agent 在会话开始时读
+          <code>~/memory-vault</code>，把自己的观察写回 log 或 projects。
+        </div>
+      </div>
+      <div class="arrow"><div><span>⇄</span><small>Syncthing<br>双向同步</small></div></div>
+      <div class="node">
+        <div class="t">服务器 vault</div>
+        <div class="d">
+          <code>ubuntu@49.232.223.150:~/memory-vault</code> 是唯一的汇聚点，也是一个 git 仓库，
+          每小时由 cron 自动提交一次。
+        </div>
+      </div>
+      <div class="arrow"><div><span>⇄</span><small>其他设备<br>同一份 vault</small></div></div>
+      <div class="node soft">
+        <div class="t">第二台设备（待接入）</div>
+        <div class="d">
+          接入方式与第一台相同：装 Syncthing、跑 <code>install.sh</code>。
+          目前还没接，所以「换设备偏好仍然保持」这件事尚未验证。
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-row" style="margin-top:2px">
+      <div class="node">
+        <div class="t">设备上的原始转录</div>
+        <div class="d">
+          <code>~/.claude/projects</code>、<code>~/.codex/sessions</code>、
+          <code>~/.dsh/sessions</code>、<code>~/.pi/agent/sessions</code> 等。
+        </div>
+      </div>
+      <div class="arrow"><div><span>→</span><small>每小时<br>rsync 只增不删</small></div></div>
+      <div class="node">
+        <div class="t">服务器归档区</div>
+        <div class="d">
+          <code>~/transcript-archive/&lt;设备&gt;/&lt;agent&gt;/</code>。
+          本地被 agent 清理掉的文件，在这里继续保留。
+        </div>
+      </div>
+      <div class="arrow"><div><span>→</span><small>dreaming<br>读取增量</small></div></div>
+      <div class="node">
+        <div class="t">dreaming</div>
+        <div class="d">
+          从归档和新 log 里提炼长期记忆，写回 vault。产出的改动经过闸门分级。
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="clock">
+  <h2><span class="num">2</span>一天里的自动动作</h2>
+  <p class="sub">按触发频率排。注意：dreaming 还没上 cron，目前只能手动跑。</p>
+
+  <div class="lane">
+    <div class="lane-label">每次会话</div>
+    <div class="lane-body">
+      agent 先读 <code>AGENT_PROTOCOL.md</code> 和 <code>MEMORY.md</code>，知道你是谁、有什么偏好、
+      手上在做什么项目。会话中出现值得长期记住的事，由 agent 决定写进
+      <code>log/</code>（原始观察）或 <code>projects/</code>（项目上下文）。
+    </div>
+  </div>
+  <div class="lane">
+    <div class="lane-label">每小时</div>
+    <div class="lane-body">
+      <strong>本机 launchd</strong> 运行 <code>archive-transcripts.sh</code>，把各 agent 的转录同步到服务器，
+      只增不删。<strong>服务器 cron</strong> 运行 <code>autocommit.sh</code>，
+      把 vault 的改动提交成一条 <code>auto: 时间戳</code> 的 git commit。
+    </div>
+  </div>
+  <div class="lane">
+    <div class="lane-label">每天（未上线）</div>
+    <div class="lane-body">
+      <strong>dreaming</strong> 读取自上次运行以来的新转录和新 log，整理成记忆。
+      设计上是每天一次，但 roadmap 里明确要求「先手动运行几次，评估产出质量」——
+      所以现在还是手动阶段。
+    </div>
+  </div>
+</section>
+
+<section id="vault">
+  <h2><span class="num">3</span>vault 里有什么，谁能写</h2>
+  <p class="sub">
+    同一个目录，不同层级的写入权限不同。这是整套系统的核心约束：
+    机器可以随手记项目上下文，但不能偷偷改你的画像和规则。
+  </p>
+  <div class="card" style="padding:0">
+    <table>
+      <thead>
+        <tr><th style="width:22%">路径</th><th style="width:40%">放什么</th><th>谁能写</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>MEMORY.md</code></td>
+          <td>索引，一行一条，最多 200 行</td>
+          <td>用户确认后，agent 写</td>
+        </tr>
+        <tr>
+          <td><code>profile/</code></td>
+          <td>USER.md（身份、设备、常驻项目）、PREFERENCES.md（语言、沟通、UI、工具链）</td>
+          <td>用户确认后，agent 写</td>
+        </tr>
+        <tr>
+          <td><code>rules/</code></td>
+          <td>被纠正过或被确认有效的工作规则，一条一个文件</td>
+          <td>用户确认后，agent 写</td>
+        </tr>
+        <tr>
+          <td><code>projects/</code></td>
+          <td>跨设备、跨 agent 的项目背景：目标、约束、决定、进度</td>
+          <td>agent 可直接写</td>
+        </tr>
+        <tr>
+          <td><code>log/</code></td>
+          <td>原始观察，按 <code>YYYY-MM.&lt;设备&gt;.md</code> 分文件，只追加</td>
+          <td>agent 随时写</td>
+        </tr>
+        <tr>
+          <td><code>proposals/</code></td>
+          <td>dreaming 想改 profile/rules 时生成的提案，等你确认</td>
+          <td>dreaming 新建，你处理</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="note" style="margin-top:14px">
+    <b>为什么这么分：</b>projects/log 是可追溯的事实记录，写错了下一条能纠正；
+    profile/rules 会影响所有 agent 的所有后续行为，写错一次就会被到处复制，所以必须人工过一道。
+  </div>
+</section>
+
+<section id="dreaming">
+  <h2><span class="num">4</span>dreaming 一次完整运行</h2>
+  <p class="sub">
+    这是最容易让人「没看懂」的部分。关键点是：<b>headless agent 不能直接改你的 vault</b>，
+    它只能改一份临时副本，最后由确定性的代码逐条比对、分类、写回。
+  </p>
+
+  <ol class="steps">
+    <li>
+      <div class="st">收增量</div>
+      <div class="sd">
+        读取两类输入：vault 里自上次运行后新增的 log 段落；归档区里自上次文件偏移之后的新转录。
+        偏移记录在 <code>.dream-state</code>，所以同一批内容不会重复处理。
+      </div>
+      <div class="why"><b>为什么：</b>每天看全量转录既慢又贵，偏移机制让每次只看新增部分。</div>
+    </li>
+    <li>
+      <div class="st">解析与筛选</div>
+      <div class="sd">
+        按 agent 各自的转录格式解析，只保留用户亲手输入的消息和 agent 的回复；
+        工具调用、系统注入、子代理噪音被过滤。总输入受预算限制（默认 20 万字符），超了截断。
+      </div>
+      <div class="why"><b>为什么：</b>转录 2.6G，其中绝大多数是工具输出，对提炼偏好没有价值。</div>
+    </li>
+    <li>
+      <div class="st">在副本上整理</div>
+      <div class="sd">
+        把输入写成 <code>input.md</code>，连同 vault 的完整副本交给 headless agent
+        （默认 <code>claude -p</code>，超时 1800 秒）。它按 <code>vault/FORMAT.md</code> 的格式要求，
+        只修改临时目录里的副本。
+      </div>
+      <div class="why"><b>为什么用副本：</b>agent 可能出错、可能被转录里的内容带偏；副本保证原始 vault 不受影响。</div>
+    </li>
+    <li>
+      <div class="st">按证据门槛取舍</div>
+      <div class="sd">
+        规则层要求同一要求出现两次以上，或用户明确说「以后都要……」「记住……」；
+        画像层只记用户明确陈述的事实，不做推断；已有且一致就跳过，补充就更新，推翻就标 superseded。
+      </div>
+      <div class="why"><b>为什么：</b>一次性的说法不值得变成长期规则，宁缺毋滥。</div>
+    </li>
+    <li>
+      <div class="st">闸门逐条分类</div>
+      <div class="sd">
+        确定性代码比对原件和副本，按路径把每个改动分成 A/B/C/拒绝四类（下一节）。
+        密钥扫描在这一步执行：gitleaks 缺失时直接 fail closed，拒绝写回。
+      </div>
+      <div class="why"><b>为什么不用 agent 自己判断：</b>分类规则必须可验证、可复现，不能交给模型自由裁量。</div>
+    </li>
+    <li>
+      <div class="st">写回与提交</div>
+      <div class="sd">
+        A 和 B 直接写回 vault 并提交；B 类改动单独成一个 commit，方便反悔时只 revert 那一块。
+        C 类不写回，生成 <code>proposals/*.md</code> 等你确认。删除、改已有 log、越权路径、疑似密钥一律拒绝。
+      </div>
+      <div class="why"><b>为什么：</b>让「机器能自己做的事」和「必须人点头的事」在物理上分开。</div>
+    </li>
+    <li>
+      <div class="st">出报告</div>
+      <div class="sd">
+        写到 <code>~/dream-reports/&lt;时间&gt;.md</code>：新增、修改、标记过期各几条；
+        发现的可疑指令；转录里的敏感信息；拿不准而跳过的内容。
+      </div>
+      <div class="why"><b>为什么：</b>无人值守任务必须留下可审计的痕迹，出了错能回看是哪一步判断错了。</div>
+    </li>
+  </ol>
+
+  <div class="card" style="margin-top:14px">
+    <h3><span class="dot"></span>失败语义</h3>
+    <p>
+      任何一步失败（agent 超时、闸门拒绝、密钥命中）都<b>不推进</b> <code>.dream-state</code>，
+      下次重跑同一批增量。这保证不会因为一次失败就永久漏掉一段记忆。
+    </p>
+  </div>
+</section>
+
+<section id="gate">
+  <h2><span class="num">5</span>闸门：一个改动会走向哪里</h2>
+  <p class="sub">只要你记住这张表，就理解了 dreaming 的全部安全边界。</p>
+  <div class="card" style="padding:0">
+    <table>
+      <thead>
+        <tr><th style="width:14%">级别</th><th style="width:46%">改动</th><th>结果</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="tier a">A</span></td>
+          <td><code>MEMORY.md</code>、<code>log/</code> 末尾追加、新提案文件</td>
+          <td>直接提交</td>
+        </tr>
+        <tr>
+          <td><span class="tier b">B</span></td>
+          <td><code>projects/</code> 新增或修改；profile/rules 条目只标 superseded</td>
+          <td>直接提交，可单独 revert</td>
+        </tr>
+        <tr>
+          <td><span class="tier c">C</span></td>
+          <td>profile/rules 的其他新增或修改</td>
+          <td>转成提案，等你确认</td>
+        </tr>
+        <tr>
+          <td><span class="tier x">拒绝</span></td>
+          <td>删除文件、改写已有 log、越权路径、符号链接、非 UTF-8、格式错误、疑似密钥</td>
+          <td>不写回</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2" style="margin-top:14px">
+    <div class="card">
+      <h3><span class="dot"></span>dry-run 是什么</div>
+      <p>
+        加 <code>--dry-run</code> 会完整跑到闸门、生成报告，但<b>不写回、不推进状态</b>。
+        用来评估产出质量，比如 2026-11-17 那次：
+      </p>
+      <p>
+        A 1 条、B 2 条、C 2 条、过期 0 条；识别出转录里的注入指令没有执行；
+        识别出明文密码没有写入。
+      </p>
+    </div>
+    <div class="card">
+      <h3><span class="dot"></span>proposals 怎么处理</h3>
+      <p>
+        每次会话开始时，如果有未处理提案，agent 会用一句话提醒你，不展开。
+        你说「处理提案」后，逐条展示，按你的决定应用，并在提案文件里标注
+        accepted / rejected。
+      </p>
+    </div>
+  </div>
+</section>
+
+<section id="agents">
+  <h2><span class="num">6</span>agent 如何接入</h2>
+  <p class="sub">
+    每个 agent 的全局指令文件里只写一句指示：先读协议，再读索引。
+    其余内容都从 vault 动态读取，所以改一次 vault，所有 agent 同时生效。
+  </p>
+  <div class="card" style="padding:0">
+    <table>
+      <thead>
+        <tr><th style="width:20%">agent</th><th style="width:44%">全局指令文件</th><th>方式</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Claude Code</td><td><code>~/.claude/CLAUDE.md</code></td><td><code>@</code> 引用</td></tr>
+        <tr><td>Codex</td><td><code>~/.codex/AGENTS.md</code></td><td>指示句（不支持 <code>@</code>）</td></tr>
+        <tr><td>DeepSeek Harness</td><td><code>$DSH_HOME/AGENTS.md</code></td><td>指示句</td></tr>
+        <tr><td>Gemini</td><td><code>~/.gemini/GEMINI.md</code></td><td><code>@</code> 引用</td></tr>
+        <tr><td>Pi</td><td><code>~/.pi/agent/AGENTS.md</code></td><td>指示句</td></tr>
+        <tr><td>Cursor</td><td>Settings → Rules → User Rules</td><td>手动填，没有全局文件</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="status">
+  <h2><span class="num">7</span>当前状态</h2>
+  <p class="sub">截至 2026-11-17 的实机检查结果。</p>
+  <div class="grid2">
+    <div class="card">
+      <h3><span class="dot"></span>已经跑起来的</h3>
+      <p>5 个 agent 已接入；本机转录全量上传完成；两端 Syncthing 与服务器 autocommit 正常；vault 已从空模板补到 11 个记忆文件；gitleaks 已安装，dreaming 闸门可用。</p>
+    </div>
+    <div class="card">
+      <h3><span class="dot"></span>还没做的</h3>
+      <p>第二台设备未接入；dreaming 未上 cron；Codex/Pi parser 未写；归档加密方案未定；archives 里存在含明文密码的转录，需要轮换密码并收紧访问。</p>
+    </div>
+  </div>
+  <div class="grid2" style="margin-top:14px">
+    <div class="card">
+      <div class="stat"><span class="n">2.6G</span><span class="l">已归档的 Claude Code 转录</span></div>
+    </div>
+    <div class="card">
+      <div class="stat"><span class="n">11</span><span class="l">vault 记忆文件（2 profile + 2 rules + 7 projects）</span></div>
+    </div>
+    <div class="card">
+      <div class="stat"><span class="n">60k</span><span class="l">本次 dry-run 使用的输入字符预算</span></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  依据 <code>docs/roadmap.md</code>、<code>FORMAT.md</code>、<code>AGENT_PROTOCOL.md</code>、<code>scripts/</code> 与 2026-11-17 实机检查生成。
+  单文件、无外部依赖，可直接分享或打印。
+</footer>
+
+</div>
+</body>
+</html>
