@@ -2,6 +2,19 @@
 
 前提：一台常在线的 Linux 服务器，各设备能通过公网或 Tailscale 访问它。
 
+## 一键部署（推荐）
+
+vault 建好后运行：
+
+```bash
+scripts/setup-server.sh --dry-run   # 只预览，不安装
+scripts/setup-server.sh             # 幂等安装，可重复运行
+```
+
+脚本会安装 Syncthing、git、Python、固定版本的 Node 和 gitleaks，写 dreaming 的 systemd timer 和每小时 autocommit cron，并启用 linger。Pi 需要按官方方式单独安装。下面的手工步骤用于理解流程或排错。
+
+换服务器、备份与恢复见 [migration.md](migration.md)。
+
 ## 1. 服务器上建 vault
 
 ```bash

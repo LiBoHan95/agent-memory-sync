@@ -116,6 +116,7 @@ docs/
   dreaming.md           自动整理流程与分级
   transcript-archive.md 转录归档
   compatibility.md      资产划分与长期兼容规则
+  migration.md          服务器备份、迁移与灾备
   web.md                服务器只读 Web
   roadmap.md            分期计划
 .cnb.yml                CNB 流水线：push / PR 时跑测试
