@@ -126,7 +126,7 @@ amem/                   核心 Python 包（只依赖标准库）
   dream.py              dreaming 主流程：收集增量 → headless agent → 闸门 → 报告
   render.py             只读 Web 的轻量 Markdown 渲染（安全转义）
   web.py                只读 Web：数据加载、页面、令牌认证、HTTP 服务
-  parsers/              各 agent 转录解析器（目前只有 Claude Code）
+  parsers/              各 agent 转录解析器（claude-code、codex、pi）
   screen.py             可选的转录预筛
   prompts/dreaming.md   给整理 agent 的指令
 tests/                  测试：python3 -m unittest discover -s tests -t .

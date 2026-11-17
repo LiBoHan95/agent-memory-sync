@@ -60,5 +60,4 @@ C 级不自动的原因：这两个目录会注入每个 agent 的每次会话�
 
 ## 待补
 
-- `scripts/archive-transcripts.sh`：转录归档仍是最优先的缺口
-- `amem/parsers/codex.py`、`amem/parsers/pi.py`
+- DeepSeek Harness 的转录是 zstd 压缩（`*.jsonl.zstd`），标准库不能直接读，解析器暂未实现。

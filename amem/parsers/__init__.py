@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from .base import Message, Parser
 from .claude_code import ClaudeCodeParser
+from .codex import CodexParser
+from .pi import PiParser
 
-PARSERS: dict[str, Parser] = {p.agent: p for p in (ClaudeCodeParser(),)}
+PARSERS: dict[str, Parser] = {p.agent: p for p in (ClaudeCodeParser(), CodexParser(), PiParser())}
 
 
 def get(agent: str) -> Parser | None:
