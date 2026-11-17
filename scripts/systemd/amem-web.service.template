@@ -1,4 +1,4 @@
-# amem 只读 Web 的 systemd 用户单元模板。
+# amem 记忆库 Web 的 systemd 用户单元模板。
 #
 # 安装（以部署 vault 的普通用户执行）：
 #   mkdir -p ~/.config/systemd/user
@@ -13,7 +13,7 @@
 # %h 是 systemd 的用户主目录占位符，无需手动替换。
 
 [Unit]
-Description=amem read-only memory web
+Description=amem memory web
 After=network.target
 
 [Service]
@@ -35,6 +35,8 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
+# 仅放开 vault 的写权限：提案批准会写回 profile/ 与 rules/。
+ReadWritePaths=%h/memory-vault
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 # 用户单元在部分云主机/容器里无法使用 ProtectKernel*/ProtectControlGroups、
 # ProtectSUIDSGID 和 LockPersonality，会以 218/CAPABILITIES 启动失败。

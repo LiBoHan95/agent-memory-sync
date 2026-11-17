@@ -1,6 +1,6 @@
-# 只读 Web
+# 记忆库 Web
 
-服务器上的查看界面：看各设备的同步/活动历史、转录归档状态和记忆文件。**只读**，不提供编辑、接受提案或删除入口。
+服务器上的查看界面：看各设备的同步/活动历史、转录归档状态和记忆文件。以查看为主，唯一的写操作是**逐条批准或驳回 dreaming 生成的提案**；不提供编辑笔记、新建笔记或删除入口。
 
 默认只监听 `127.0.0.1:8787`，通过 SSH 隧道访问；不设计成公网服务。
 
@@ -17,9 +17,11 @@
 | `/history/<hash>` | 单次提交的 diff |
 | `/reports` | dreaming 报告列表 |
 | `/reports/<文件名>` | 报告正文；`?raw=1` 查看原文 |
-| `/proposals` | 整理提案列表与待处理数量 |
-| `/proposals/<文件名>` | 提案正文；`?raw=1` 查看原文 |
+| `/proposals` | 整理提案列表、待处理数量与涉及的条目 |
+| `/proposals/<文件名>` | 提案逐条渲染成卡片：说明、正文、补丁；待处理条目带「批准并写入 / 驳回」按钮；`?raw=1` 查看原文 |
 | `/healthz` | 健康检查，返回 `ok`，不需要令牌 |
+
+提案决定用 `POST /proposals/<文件名>/decision`，表单字段是 `index` 和 `action=accept|reject`。批准会立即把补丁写入目标文件并提交；驳回只把提案标题标成 `rejected`。
 
 “同步历史”在 Web 里是**设备活动历史**：vault 里按设备分开的 `log/YYYY-MM.<device>.md`，加上归档目录的新旧程度。它不读取 Syncthing 的传输记录（那需要 Syncthing REST API），也不展示转录内容。
 
@@ -66,7 +68,7 @@ loginctl enable-linger "$USER"   # 未登录时也保持运行
 
 单元文件假定仓库在 `~/agent-memory-sync`、vault 在 `~/memory-vault`。放在别处就改 `WorkingDirectory`、`ExecStart` 和 `AMEM_VAULT`/`AMEM_ARCHIVE`/`AMEM_REPORTS`；`AMEM_REPORTS` 要与 dreaming 的报告目录一致（默认是 vault 同级的 `dream-reports/`）。
 
-单元里设置了 `ProtectHome=read-only` 和 `ProtectSystem=strict`，从 OS 层限制服务只能读、不能写 vault。
+单元里设置了 `ProtectHome=read-only` 和 `ProtectSystem=strict`，再用 `ReadWritePaths=%h/memory-vault` 只放开 vault 的写权限；仓库代码、归档目录和 `~/.config` 保持只读。批准提案依赖这条写权限，删掉它按钮会失败。
 
 查看状态和日志：
 
@@ -106,20 +108,30 @@ Tailscale 用户可以用 `tailscale serve --bg 8787` 把服务只暴露给 tail
 
 ## 安全边界
 
-- 只实现 `GET`/`HEAD`；`POST`/`PUT`/`DELETE`/`PATCH` 返回 405。
+- 读接口只接受 `GET`/`HEAD`；唯一的写接口是 `POST /proposals/<name>/decision`，其它 `POST` 与 `PUT`/`DELETE`/`PATCH` 返回 405。
+- 提案决定必须已通过令牌认证；未设置令牌时只接受本机回环地址，并要求浏览器提交的 `Origin` 也是回环地址，跨站表单会被拒绝。
+- 批准时目标路径只允许 `profile/` 与 `rules/` 下的 `.md`；拒绝 `..`、绝对路径、符号链接和越界解析。
+- 写回前会把补丁应用到当前文件做上下文比对；文件在提案生成后被改过就返回 409，提案保持 `pending`，不会强写。
+- 写回前重新校验 frontmatter 格式，并用内置密钥正则兜底扫描；命中即拒绝。
 - 默认回环监听；非回环地址强制令牌。
 - 笔记、报告、提案路径都限制在各自根目录内；拒绝 `..`、绝对路径、符号链接和越界解析。
 - 不读取、不展示 `~/.claude/projects`、`~/.codex/sessions` 等原始转录；只统计归档目录的文件数、体积和 mtime。
 - 所有页面先做 HTML 转义；Markdown 渲染器不允许原始 HTML，只放行 `http`/`https`/`mailto`/`tel` scheme 和相对链接，拒绝 `javascript:`、`data:`、`file:`、反斜杠和控制字符。
 - 响应带 CSP（`default-src 'none'`）、`X-Content-Type-Options: nosniff`、`Cache-Control: no-store`、`Referrer-Policy: no-referrer`。
 - 文件读取上限 512 KB；log 只读最近 512 KB，页面会标注截断；提交 diff 上限 256 KB。仪表盘的 vault 校验会跳过超过 512 KB 的文件，归档统计缓存 60 秒，避免每次请求都扫描大目录。
-- 令牌是单一共享密钥，没有多用户和逐人审计。令牌泄露就换掉并重启服务。
+- 令牌是单一共享密钥，没有多用户和逐人审计。令牌泄露不只是能看记忆，也能改动规则；泄露就换掉并重启服务。
 
-## 只读的边界
+## 写入的边界
 
-Web 进程本身不做任何写操作，但“只读”是功能层面而不是权限层面的保证：如果不用 systemd 的 `ProtectHome=read-only`，进程仍以你的用户身份运行，拥有该用户对 vault 的写权限。部署时保留单元模板里的保护项。
+Web 唯一的写操作是提案决定，走的仍是确定性代码而不是 agent：
 
-提案的接受/拒绝不在 Web 里做：回到会话中让 agent 处理，或直接编辑提案文件。
+- 批准：只应用提案里的补丁，目标限定 `profile/`、`rules/`，写前复核补丁上下文、笔记格式和疑似密钥；成功后把标题状态改成 `accepted` 并 git 提交。
+- 驳回：只把标题状态改成 `rejected`，目标文件不动。
+- 提案已经处理过（`accepted`/`rejected`）不能再操作；需要改判时直接编辑提案文件，或等下一轮整理重新生成。
+- 没有编辑笔记、新建笔记、删除文件或执行任意命令的接口。
+- systemd 层用 `ProtectHome=read-only` + `ReadWritePaths=%h/memory-vault` 把写权限限制在 vault 内；仓库代码和归档目录仍然只读。
+
+接受提案也会被 dreaming 的下一次整理看见：目标文件已经变化，后续提案会基于新内容生成。
 
 ## 排错
 

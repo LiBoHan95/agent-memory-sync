@@ -1,4 +1,4 @@
-"""只读 Web 的渲染、数据加载、路由、认证与路径安全测试。"""
+"""Web 的渲染、数据加载、路由、认证与路径安全测试。"""
 from __future__ import annotations
 
 import http.client
@@ -91,6 +91,35 @@ print('<x>')
     os.utime(reports / "2026-11-12-043000.md", (1000, 1000))
     os.utime(reports / "2026-11-13-043000.md", (2000, 2000))
     return vault, archive, reports
+
+
+RULE_TEXT = """---
+schema_version: 1
+name: scope-rule
+description: 改动和删除以用户点名的部分为界
+type: rule
+status: active
+source: dreaming@device-a
+created: 2026-11-18
+updated: 2026-11-18
+superseded_by:
+---
+用户点名「删掉某个步骤」时，只动那一步。
+"""
+
+
+def write_rule_proposal(vault: Path, *, old: str | None = None,
+                        content: str = RULE_TEXT,
+                        target: str = "rules/scope.md") -> Path:
+    import difflib
+    diff = difflib.unified_diff(
+        old.splitlines() if old is not None else [], content.splitlines(),
+        f"a/{target}", f"b/{target}", lineterm="")
+    kind = "修改" if old is not None else "新增"
+    path = vault / "proposals" / "2026-11-18.md"
+    write(path, f"# 整理提案 2026-11-18\n\n## 1. {kind} `{target}` · pending\n\n"
+                "````diff\n" + "\n".join(diff) + "\n````\n")
+    return path
 
 
 class RenderTest(unittest.TestCase):
@@ -463,6 +492,63 @@ class WebAppTest(unittest.TestCase):
                 status, _, _ = self.app.route(path, {})
                 self.assertEqual(status, 404)
 
+    def test_proposal_page_renders_content_and_buttons(self):
+        write_rule_proposal(self.vault)
+        status, _, body = self.app.route("/proposals/2026-11-18.md", {})
+        self.assertEqual(status, 200)
+        self.assertIn("改动和删除以用户点名的部分为界", body)
+        self.assertIn("批准并写入", body)
+        self.assertIn("驳回", body)
+        self.assertIn("查看补丁", body)
+        self.assertIn('method="post"', body)
+        self.assertIn('action="/proposals/2026-11-18.md/decision"', body)
+
+    def test_proposal_accept_via_app(self):
+        write_rule_proposal(self.vault)
+        status, location = self.app.decide_proposal(
+            "2026-11-18.md", {"index": ["1"], "action": ["accept"]})
+        self.assertEqual(status, 303)
+        self.assertEqual(location, "/proposals/2026-11-18.md?done=accept")
+        self.assertEqual((self.vault / "rules" / "scope.md").read_text(), RULE_TEXT)
+        self.assertIn("· accepted",
+                      (self.vault / "proposals" / "2026-11-18.md").read_text())
+        status, _, body = self.app.route("/proposals/2026-11-18.md", {"done": ["accept"]})
+        self.assertEqual(status, 200)
+        self.assertIn("已批准并写入记忆库", body)
+        self.assertIn("已接受", body)
+        self.assertNotIn('value="accept"', body)
+
+    def test_proposal_reject_via_app(self):
+        write_rule_proposal(self.vault)
+        status, location = self.app.decide_proposal(
+            "2026-11-18.md", {"index": ["1"], "action": ["reject"]})
+        self.assertEqual((status, location),
+                         (303, "/proposals/2026-11-18.md?done=reject"))
+        self.assertFalse((self.vault / "rules" / "scope.md").exists())
+        status, _, body = self.app.route("/proposals/2026-11-18.md", {"done": ["reject"]})
+        self.assertIn("已驳回", body)
+        self.assertNotIn("批准并写入", body)
+
+    def test_proposal_bad_request_fields(self):
+        write_rule_proposal(self.vault)
+        for fields in ({}, {"index": ["1"]}, {"index": ["x"], "action": ["accept"]},
+                       {"index": ["1"], "action": ["delete"]}):
+            with self.subTest(fields=fields):
+                status, _ = self.app.decide_proposal("2026-11-18.md", fields)
+                self.assertEqual(status, 400)
+        status, _ = self.app.decide_proposal("..", {"index": ["1"], "action": ["accept"]})
+        self.assertEqual(status, 404)
+
+    def test_proposal_conflict_disables_accept_button(self):
+        old = RULE_TEXT + "\n第二段。\n"
+        write_rule_proposal(self.vault, old=old, content=old + "\n第三段。\n")
+        write(self.vault / "rules" / "scope.md", "别的内容\n")
+        status, _, body = self.app.route("/proposals/2026-11-18.md", {})
+        self.assertEqual(status, 200)
+        self.assertIn("无法自动应用", body)
+        self.assertNotIn("批准并写入", body)
+        self.assertIn("驳回", body)
+
     def test_auth_page(self):
         page = self.app.auth_page("/memory", {"raw": ["1"], "a": ["1", "2"]})
         self.assertIn('action="/memory"', page)
@@ -523,6 +609,92 @@ class WebHTTPTest(unittest.TestCase):
             return b"".join(chunks)
         finally:
             sock.close()
+
+    def test_post_decision_accept_without_token(self):
+        self.start()
+        write_rule_proposal(self.vault)
+        origin = f"http://127.0.0.1:{self.port}"
+        status, headers, _ = self.request(
+            "POST", "/proposals/2026-11-18.md/decision",
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "Origin": origin},
+            body=b"index=1&action=accept")
+        self.assertEqual(status, 303)
+        self.assertEqual(headers["location"], "/proposals/2026-11-18.md?done=accept")
+        self.assertEqual((self.vault / "rules" / "scope.md").read_text(), RULE_TEXT)
+
+    def test_post_decision_requires_loopback_origin_without_token(self):
+        self.start()
+        write_rule_proposal(self.vault)
+        for origin in (None, "https://evil.example", "null"):
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
+            if origin:
+                headers["Origin"] = origin
+            with self.subTest(origin=origin):
+                status, _, _ = self.request(
+                    "POST", "/proposals/2026-11-18.md/decision",
+                    headers=headers, body=b"index=1&action=accept")
+                self.assertEqual(status, 403)
+        self.assertFalse((self.vault / "rules" / "scope.md").exists())
+
+    def test_post_decision_requires_token_when_configured(self):
+        self.start(token="secret")
+        write_rule_proposal(self.vault)
+        status, _, _ = self.request(
+            "POST", "/proposals/2026-11-18.md/decision",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            body=b"index=1&action=accept")
+        self.assertEqual(status, 401)
+
+    def test_post_decision_with_token_cookie(self):
+        self.start(token="secret")
+        write_rule_proposal(self.vault)
+        status, headers, _ = self.request("GET", "/proposals/2026-11-18.md?token=secret")
+        self.assertEqual(status, 302)
+        self.assertIn("amem_token=secret", headers["set-cookie"])
+        status, _, _ = self.request(
+            "POST", "/proposals/2026-11-18.md/decision",
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "Cookie": "amem_token=secret"},
+            body=b"index=1&action=accept")
+        self.assertEqual(status, 303)
+        self.assertTrue((self.vault / "rules" / "scope.md").exists())
+
+    def test_post_decision_conflict_returns_409(self):
+        self.start()
+        old = RULE_TEXT + "\n第二段。\n"
+        write_rule_proposal(self.vault, old=old, content=old + "\n第三段。\n")
+        write(self.vault / "rules" / "scope.md", "别的内容\n")
+        status, _, body = self.request(
+            "POST", "/proposals/2026-11-18.md/decision",
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "Origin": f"http://127.0.0.1:{self.port}"},
+            body=b"index=1&action=accept")
+        self.assertEqual(status, 409)
+        self.assertIn(b"409", body)
+        self.assertIn("· pending",
+                      (self.vault / "proposals" / "2026-11-18.md").read_text())
+
+    def test_post_other_paths_still_405(self):
+        self.start()
+        for path in ("/", "/proposals", "/proposals/2026-11-18.md"):
+            with self.subTest(path=path):
+                status, headers, _ = self.request(
+                    "POST", path,
+                    headers={"Content-Type": "application/x-www-form-urlencoded",
+                             "Origin": f"http://127.0.0.1:{self.port}"},
+                    body=b"x=1")
+                self.assertEqual(status, 405)
+                self.assertEqual(headers["allow"], "GET, HEAD")
+
+    def test_post_decision_rejects_bad_content_type(self):
+        self.start()
+        write_rule_proposal(self.vault)
+        status, _, _ = self.request(
+            "POST", "/proposals/2026-11-18.md/decision",
+            headers={"Origin": f"http://127.0.0.1:{self.port}"},
+            body=b"index=1&action=accept")
+        self.assertEqual(status, 415)
 
     def test_get_head_and_methods(self):
         self.start()
@@ -775,7 +947,7 @@ class ScriptTest(unittest.TestCase):
         r = subprocess.run(["/bin/bash", str(SCRIPT), "--help"], text=True,
                            capture_output=True, env=env, timeout=20)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("只读记忆库 Web", r.stdout)
+        self.assertIn("记忆库 Web", r.stdout)
         self.assertIn("--token", r.stdout)
 
 

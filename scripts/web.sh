@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 启动只读记忆库 Web。默认只监听 127.0.0.1:8787，通过 SSH 隧道访问。
+# 启动记忆库 Web。默认只监听 127.0.0.1:8787，通过 SSH 隧道访问；
+# 除了查看，提案页可以批准/驳回提案。
 #
 # 用法: scripts/web.sh [--host 127.0.0.1] [--port 8787] [--token ...]
 #       [--vault PATH] [--archive PATH] [--reports PATH]

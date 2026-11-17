@@ -87,9 +87,9 @@ scripts/check-agents.sh        # 只读检查接入结果
 
 详见 [docs/agent-integration.md](docs/agent-integration.md) 和 [docs/transcript-archive.md](docs/transcript-archive.md)。
 
-### 4. 只读 Web（可选）
+### 4. 记忆库 Web（可选）
 
-服务器上可安装只读 Web，用来看设备活动、记忆文件、git 历史、归档统计和整理报告。默认只监听 `127.0.0.1:8787`，通过 SSH 隧道访问，不暴露公网：
+服务器上可安装记忆库 Web，用来看设备活动、记忆文件、git 历史、归档统计和整理报告。提案页会把每条变更渲染成可读的卡片，可以直接「批准并写入」或「驳回」；批准由确定性代码写回 `profile/` 或 `rules/`，不经 agent。默认只监听 `127.0.0.1:8787`，通过 SSH 隧道访问，不暴露公网：
 
 ```bash
 ssh -N -L 8787:127.0.0.1:8787 user@server
@@ -117,15 +117,16 @@ docs/
   transcript-archive.md 转录归档
   compatibility.md      资产划分与长期兼容规则
   migration.md          服务器备份、迁移与灾备
-  web.md                服务器只读 Web
+  web.md                服务器 Web（查看 + 提案批准/驳回）
   roadmap.md            分期计划
 .cnb.yml                CNB 流水线：push / PR 时跑测试
 amem/                   核心 Python 包（只依赖标准库）
   format.py             记忆文件格式：frontmatter 与 vault 校验、log 读写
   gate.py               写回闸门：A/B/C/拒绝分级、密钥扫描、校验后写回
+  proposals.py          提案解析与批准/驳回：补丁应用、状态标记、写回
   dream.py              dreaming 主流程：收集增量 → headless agent → 闸门 → 报告
-  render.py             只读 Web 的轻量 Markdown 渲染（安全转义）
-  web.py                只读 Web：数据加载、页面、令牌认证、HTTP 服务
+  render.py             Web 的轻量 Markdown 渲染（安全转义）
+  web.py                服务器 Web：数据加载、页面、令牌认证、HTTP 服务
   parsers/              各 agent 转录解析器（claude-code、codex、pi）
   screen.py             可选的转录预筛
   prompts/dreaming.md   给整理 agent 的指令
@@ -136,5 +137,5 @@ scripts/                运维脚本（自动提交、转录归档、dreaming/We
 
 ## 状态
 
-第一期文档与 vault 模板、第二期核心代码、服务器只读 Web 已完成，见 [docs/roadmap.md](docs/roadmap.md)。
+第一期文档与 vault 模板、第二期核心代码、服务器 Web 已完成，见 [docs/roadmap.md](docs/roadmap.md)。
 待补：Codex / Pi 解析器、客户端 Syncthing 配对与各 agent 的实际接入验证。

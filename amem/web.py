@@ -1,6 +1,7 @@
-"""服务器只读 Web：查看各设备活动、转录归档状态和记忆文件。
+"""服务器 Web：查看各设备活动、转录归档状态和记忆文件。
 
-只读：所有路由只接受 GET/HEAD，不提供任何写接口，也不展示原始转录内容。
+默认只读；唯一的写路径是「批准 / 驳回提案」：把 proposals/ 里的补丁应用到
+profile/ 与 rules/ 下的目标文件。所有路由只接受 GET/HEAD，提案决定用 POST。
 默认只监听 127.0.0.1，通过 Tailscale 或 SSH 隧道访问。
 
 用法:
@@ -29,6 +30,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 from . import format as fmt
+from . import proposals as propmod
 from .render import render_markdown
 
 MAX_FILE_BYTES = 512 * 1024
@@ -40,6 +42,7 @@ TEXT_TYPE = "text/plain; charset=utf-8"
 _LOG_DEVICE_RE = re.compile(r"^log/\d{4}-\d{2}\.(.+)\.md$")
 _DEVICE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+_DECISION_RE = re.compile(r"^/proposals/([^/]+)/decision$")
 _PROPOSAL_STATUSES = frozenset({"pending", "accepted", "rejected"})
 _COMMIT_FIELDS = 5
 
@@ -128,6 +131,7 @@ class Proposal:
     pending: int
     total: int
     mtime: float
+    items: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -440,8 +444,10 @@ def load_proposals(vault: Path) -> list[Proposal]:
             mtime = path.stat().st_mtime
         except OSError:
             mtime = 0
+        sections = propmod.parse_sections(text)
         out.append(Proposal(path.name, _first_heading(text) or path.stem,
-                            pending, len(marks) or 1, mtime))
+                            pending, len(marks) or 1, mtime,
+                            [propmod.section_summary(s) for s in sections]))
     out.sort(key=lambda p: (p.mtime, p.name), reverse=True)
     return out
 
@@ -574,6 +580,16 @@ def _is_loopback_host(value: str) -> bool:
     return True
 
 
+def _is_loopback_origin(value: str) -> bool:
+    """POST 的 Origin 必须是本机页面；没有令牌时用它防跨站提交。"""
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return False
+    return (parsed.scheme in ("http", "https") and bool(parsed.hostname)
+            and _is_loopback_host(parsed.hostname))
+
+
 def _valid_token(token: str) -> bool:
     # RFC 6265 cookie-octet：保证各种浏览器都能原样回传 Set-Cookie 的值。
     for ch in token:
@@ -668,6 +684,25 @@ ul,ol{margin:8px 0;padding-left:24px}
 li{margin:3px 0}
 .meta th{width:150px;color:var(--muted);font-weight:600}
 .empty{color:var(--muted);padding:10px 0}
+.notice{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--warn);
+  border-radius:8px;padding:10px 14px;color:var(--muted);font-size:14px}
+.notice.bad{border-left-color:var(--bad);color:var(--bad)}
+.flash{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--tag);
+  border-radius:8px;padding:10px 14px;font-size:14px}
+.proposal{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:18px 20px;margin:16px 0}
+.proposal .head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.proposal .head strong{font-size:15px}
+.proposal .proposal-body{margin-top:12px;border-top:1px solid var(--line);padding-top:6px}
+.proposal .acts{display:flex;gap:10px;margin-top:16px;padding-top:14px;
+  border-top:1px solid var(--line)}
+.proposal button{padding:7px 16px;border:1px solid var(--line);border-radius:6px;
+  background:var(--bg);color:var(--ink);font-size:14px;cursor:pointer;font-family:inherit}
+.proposal button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.proposal button.danger{color:var(--bad);border-color:var(--bad)}
+pre.diff{white-space:pre-wrap;word-break:break-word;margin-top:8px}
+details{margin-top:12px}
+summary{cursor:pointer;color:var(--muted);font-size:13px}
 footer{max-width:1100px;margin:0 auto;padding:0 20px 30px;color:var(--muted);font-size:12px}
 form.token{max-width:340px;background:var(--panel);border:1px solid var(--line);
   border-radius:10px;padding:20px}
@@ -693,7 +728,7 @@ def _page(title: str, body: str, active: str = "") -> str:
         f"<title>{_esc(title)} · 记忆库</title><style>{_CSS}</style></head><body>"
         f"<header><div class=\"wrap\"><a class=\"brand\" href=\"/\">记忆库</a><nav>{''.join(links)}</nav></div></header>"
         f"<main>{body}</main>"
-        "<footer>记忆库 · 只读视图</footer></body></html>"
+        "<footer>记忆库 · 本地视图</footer></body></html>"
     )
 
 
@@ -1080,16 +1115,20 @@ class WebApp:
 
     def proposals_page(self) -> str:
         proposals = load_proposals(self.cfg.vault)
-        rows = [
-            "<tr>"
-            f'<td><a href="{_href("proposals", p.name)}">{_esc(p.title)}</a></td>'
-            f"<td>{p.pending} / {p.total}</td>"
-            f"<td>{_esc(_fmt_ts(p.mtime))}</td>"
-            "</tr>" for p in proposals
-        ]
+        rows = []
+        for p in proposals:
+            items = "；".join(p.items) if p.items else "无法解析条目"
+            rows.append(
+                "<tr>"
+                f'<td><a href="{_href("proposals", p.name)}">{_esc(p.title)}</a></td>'
+                f"<td>{p.pending} / {p.total}</td>"
+                f"<td>{_esc(items)}</td>"
+                f"<td>{_esc(_fmt_ts(p.mtime))}</td>"
+                "</tr>")
         body = ("<h1>整理提案</h1>"
-                '<p class="sub">只读视图。接受或拒绝请在会话中让助手处理，或直接编辑提案文件。</p>'
-                f'<div class="panel">{_table(["提案", "待处理 / 总数", "时间"], rows)}</div>')
+                '<p class="sub">整理任务改动画像或规则时，会把变更写成提案。'
+                "打开提案可逐条查看内容并批准或驳回；批准后会立即写入记忆库并提交。</p>"
+                f'<div class="panel">{_table(["提案", "待处理 / 总数", "内容", "时间"], rows)}</div>')
         return _page("提案", body, "proposals")
 
     def proposal_page(self, name: str, query: dict[str, list[str]]):
@@ -1102,12 +1141,94 @@ class WebApp:
         raw = (query.get("raw") or [""])[0] in ("1", "true", "yes")
         toggle = (f'<a href="{_href("proposals", path.name)}">渲染</a>' if raw
                   else f'<a href="{_href("proposals", path.name)}?raw=1">原文</a>')
-        content = (f'<pre class="raw">{_esc(text)}</pre>' if raw
-                   else f'<div class="panel">{render_markdown(text)}</div>')
+        if raw:
+            content = f'<pre class="raw">{_esc(text)}</pre>'
+        else:
+            content = self._proposal_sections(path.name, text, query)
         body = (f"<h1>{_esc(path.name)}</h1>"
                 f'<p class="sub"><a href="/proposals">返回提案</a> · {toggle}</p>'
                 f"{_truncation_note(path)}{content}")
         return 200, HTML_TYPE, _page(path.name, body, "proposals")
+
+    def _proposal_sections(self, name: str, text: str, query: dict[str, list[str]]) -> str:
+        sections = propmod.parse_sections(text)
+        if not sections:
+            return ('<p class="notice">没能从提案里解析出条目，下面按原文显示。</p>'
+                    f'<div class="panel">{render_markdown(text)}</div>')
+        done = (query.get("done") or [""])[0]
+        flash = ""
+        if done in ("accept", "reject"):
+            flash = ('<p class="flash ok">已批准并写入记忆库，所有设备同步后会看到这次修改。</p>'
+                     if done == "accept"
+                     else '<p class="flash ok">已驳回，目标文件没有改动。</p>')
+        pending = sum(1 for s in sections if s.status == propmod.PENDING)
+        summary = f'<p class="sub">共 {len(sections)} 条 · 待处理 {pending} 条</p>'
+        return flash + summary + "".join(
+            self._section_card(name, section) for section in sections)
+
+    def _section_card(self, name: str, sec: propmod.Section) -> str:
+        badge = (f'<span class="badge {_esc(sec.status)}">'
+                 f'{_esc(_status_label(sec.status))}</span>')
+        shown: str | None = None
+        problem: str | None = None
+        if sec.status == propmod.ACCEPTED:
+            target_path = self.root / sec.target
+            shown = _read_text(target_path) if target_path.is_file() else None
+            if shown is None:
+                problem = "目标文件暂时无法读取"
+        else:
+            shown, problem = propmod.preview(self.root, sec)
+
+        meta: dict[str, str] | None = None
+        body = shown or ""
+        if shown is not None:
+            try:
+                meta, body = fmt.parse_frontmatter(shown)
+            except fmt.FormatError:
+                meta, body = None, shown
+        title = (meta or {}).get("description", "") or _first_heading(body)
+        head = (f'<div class="head"><span class="tag">{_esc(sec.label)}</span>'
+                + (f"<strong>{_esc(title)}</strong>" if title else "") + badge + "</div>")
+        status_note = ('<p class="sub">已应用。下面显示目标文件的当前内容。</p>'
+                       if sec.status == propmod.ACCEPTED else "")
+        problem_html = (f'<p class="notice bad">无法自动应用：{_esc(problem)}</p>'
+                        if problem else "")
+        rendered = (f'<div class="proposal-body">{self._render_text(body, sec.target)}</div>'
+                    if shown is not None else "")
+        diff_html = ""
+        if sec.diff is not None:
+            diff_html = ('<details><summary>查看补丁</summary>'
+                         f'<pre class="diff">{_esc(chr(10).join(sec.diff))}</pre></details>')
+        actions = ""
+        if sec.status == propmod.PENDING:
+            accept = ("" if problem else
+                      '<button class="primary" name="action" value="accept" '
+                      'type="submit">批准并写入</button>')
+            actions = (
+                f'<form class="acts" method="post" '
+                f'action="{_href("proposals", name + "/decision")}">'
+                f'<input type="hidden" name="index" value="{sec.index}">'
+                f"{accept}"
+                '<button class="danger" name="action" value="reject" type="submit">驳回</button>'
+                "</form>")
+        return (f'<section class="proposal">{head}'
+                f'<p class="sub">目标：<code>{_esc(sec.target)}</code></p>'
+                f"{status_note}{problem_html}{rendered}{diff_html}{actions}</section>")
+
+    def decide_proposal(self, name: str, fields: dict[str, list[str]]):
+        index_text = (fields.get("index") or [""])[0]
+        action = (fields.get("action") or [""])[0]
+        if not index_text.isdigit() or action not in ("accept", "reject"):
+            return 400, "请求参数不完整"
+        try:
+            propmod.decide(self.cfg.vault, name, int(index_text), action)
+        except propmod.ProposalNotFound as e:
+            return 404, str(e)
+        except propmod.ProposalConflict as e:
+            return 409, str(e)
+        except propmod.ProposalError as e:
+            return 400, str(e)
+        return 303, f"{_href('proposals', name)}?done={action}"
 
     # ----- 辅助 -----
 
@@ -1162,15 +1283,15 @@ def _make_handler(app: WebApp):
             self._handle(app, head=True)
 
         def do_POST(self):
-            self._method_not_allowed()
-
-        do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_TRACE = do_POST
+            self._handle(app, head=False, post=True)
 
         def _method_not_allowed(self):
-            self._send(405, HTML_TYPE, app.error_page(405, "只支持 GET/HEAD"), head=False,
-                       extra=(("Allow", "GET, HEAD"),))
+            self._send(405, HTML_TYPE, app.error_page(405, "只支持 GET/HEAD"),
+                       head=False, extra=(("Allow", "GET, HEAD"),))
 
-        def _handle(self, app: WebApp, head: bool):
+        do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_TRACE = _method_not_allowed
+
+        def _handle(self, app: WebApp, head: bool, post: bool = False):
             try:
                 parsed = urlparse(self.path)
                 path = unquote(parsed.path)
@@ -1188,11 +1309,58 @@ def _make_handler(app: WebApp):
             try:
                 if not self._check_auth(app, path, query, head=head):
                     return
+                if post:
+                    self._handle_post(app, path, head=head)
+                    return
                 status, ctype, body = app.route(path, query)
             except Exception:
                 traceback.print_exc()
                 status, ctype, body = 500, HTML_TYPE, app.error_page(500, "内部错误")
             self._send(status, ctype, body, head=head)
+
+        def _handle_post(self, app: WebApp, path: str, *, head: bool) -> None:
+            """唯一的写入口：/proposals/<name>/decision。"""
+            match = _DECISION_RE.match(path)
+            if match is None:
+                self.close_connection = True
+                self._send(405, HTML_TYPE, app.error_page(405, "只支持 GET/HEAD"),
+                           head=head, extra=(("Allow", "GET, HEAD"),))
+                return
+            if not app.cfg.token:
+                # 没有令牌时，浏览器必须带上本机 Origin；跨站表单拿不到。
+                origin = self.headers.get("Origin")
+                if origin is None or not _is_loopback_origin(origin):
+                    self.close_connection = True
+                    self._send(403, HTML_TYPE, app.error_page(403, "拒绝跨站请求"), head=head)
+                    return
+            ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            if ctype != "application/x-www-form-urlencoded":
+                self.close_connection = True
+                self._send(415, HTML_TYPE, app.error_page(415, "请求格式不支持"), head=head)
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or "")
+            except ValueError:
+                length = -1
+            if length < 0 or length > 4096:
+                self.close_connection = True
+                status = 411 if length < 0 else 413
+                message = "缺少请求长度" if length < 0 else "请求过大"
+                self._send(status, HTML_TYPE, app.error_page(status, message), head=head)
+                return
+            body = self.rfile.read(length)
+            try:
+                form = parse_qs(body.decode("utf-8"), keep_blank_values=True,
+                                max_num_fields=10)
+            except (ValueError, UnicodeError):
+                self._send(400, HTML_TYPE, app.error_page(400, "请求不合法"), head=head)
+                return
+            status, message = app.decide_proposal(match.group(1), form)
+            if status == 303:
+                self._send(303, TEXT_TYPE, "", head=head,
+                           extra=(("Location", message),))
+            else:
+                self._send(status, HTML_TYPE, app.error_page(status, message), head=head)
 
         def _check_auth(self, app: WebApp, path: str, query: dict[str, list[str]],
                         *, head: bool) -> bool:
@@ -1283,7 +1451,7 @@ def _is_loopback(host: str) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m amem.web", description="只读记忆库 Web")
+    ap = argparse.ArgumentParser(prog="python -m amem.web", description="记忆库 Web")
     ap.add_argument("--vault", type=Path, help="vault 路径（默认 ~/memory-vault）")
     ap.add_argument("--archive", type=Path, help="转录归档路径（默认 ~/transcript-archive）")
     ap.add_argument("--reports", type=Path, help="dreaming 报告目录（默认 vault 同级 dream-reports）")
@@ -1321,7 +1489,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error(f"无法启动服务: {e}")
     host, port = server.server_address[:2]
     display_host = f"[{host}]" if ":" in host else host
-    print(f"amem-web: http://{display_host}:{port}/ （只读）", flush=True)
+    print(f"amem-web: http://{display_host}:{port}/ （提案可在页面内批准或驳回）", flush=True)
     if not cfg.archive.is_dir():
         print(f"amem-web: 归档目录不存在，设备归档信息为空: {cfg.archive}", flush=True)
     if not cfg.reports.is_dir():

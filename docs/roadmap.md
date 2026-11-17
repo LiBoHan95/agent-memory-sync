@@ -17,7 +17,7 @@
 - [x] `scripts/install.sh`：新设备接入（协议引用、cleanupPeriodDays、additionalDirectories）
 - [x] `scripts/check-agents.sh`：检查各 agent 是否已接入
 - [x] `scripts/autocommit.sh`：服务器每小时自动提交
-- [x] 服务器只读 Web（`docs/web.md`）：设备活动、归档状态、记忆/报告/提案查看
+- [x] 服务器 Web（`docs/web.md`）：设备活动、归档状态、记忆/报告/提案查看；提案可逐条批准/驳回
 - [x] `scripts/setup-server.sh`：服务器一键部署（固定版本、timer、cron）
 - [x] `docs/migration.md`：备份、迁移与灾备清单
 - [ ] 第二台设备接入
