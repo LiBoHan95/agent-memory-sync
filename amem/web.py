@@ -31,6 +31,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 from . import format as fmt
 from . import proposals as propmod
+from . import syncthing
 from .render import render_markdown
 
 MAX_FILE_BYTES = 512 * 1024
@@ -38,11 +39,13 @@ MAX_DIFF_BYTES = 256 * 1024
 ARCHIVE_CACHE_SECONDS = 60
 HTML_TYPE = "text/html; charset=utf-8"
 TEXT_TYPE = "text/plain; charset=utf-8"
+JSON_TYPE = "application/json; charset=utf-8"
 
 _LOG_DEVICE_RE = re.compile(r"^log/\d{4}-\d{2}\.(.+)\.md$")
 _DEVICE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 _DECISION_RE = re.compile(r"^/proposals/([^/]+)/decision$")
+_API_DECISION_RE = re.compile(r"^/api/proposals/([^/]+)/decision$")
 _PROPOSAL_STATUSES = frozenset({"pending", "accepted", "rejected"})
 _COMMIT_FIELDS = 5
 
@@ -463,6 +466,17 @@ def load_state(vault: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def count_sync_conflicts(vault: Path) -> int:
+    """数 vault 里的 Syncthing 冲突副本；只读文件名，不读内容。"""
+    count = 0
+    for dirpath, dirnames, filenames in os.walk(vault, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in fmt.IGNORED_DIRS]
+        for name in filenames:
+            if fmt.is_sync_conflict(name):
+                count += 1
+    return count
+
+
 def vault_issues(vault: Path) -> tuple[int, int, bool]:
     """返回 (错误数, 警告数, 是否成功校验)；结果缓存 60 秒。"""
     key = str(vault.resolve())
@@ -535,6 +549,10 @@ def load_commit(vault: Path, rev: str) -> tuple[str, bool] | None:
 
 def _esc(value) -> str:
     return html.escape(str(value), quote=True)
+
+
+def _json(payload, status: int = 200):
+    return status, JSON_TYPE, json.dumps(payload, ensure_ascii=False)
 
 
 def _same_secret(left: str, right: str) -> bool:
@@ -816,6 +834,12 @@ class WebApp:
             return 200, HTML_TYPE, self.dashboard()
         if path == "/healthz":
             return 200, TEXT_TYPE, "ok\n"
+        if path == "/api/status":
+            return self.api_status()
+        if path == "/api/proposals":
+            return self.api_proposals()
+        if path.startswith("/api/proposals/"):
+            return self.api_proposal(path[len("/api/proposals/"):])
         if path == "/memory":
             return 200, HTML_TYPE, self.memory_index()
         if path.startswith("/memory/"):
@@ -1166,19 +1190,15 @@ class WebApp:
         return flash + summary + "".join(
             self._section_card(name, section) for section in sections)
 
-    def _section_card(self, name: str, sec: propmod.Section) -> str:
-        badge = (f'<span class="badge {_esc(sec.status)}">'
-                 f'{_esc(_status_label(sec.status))}</span>')
-        shown: str | None = None
-        problem: str | None = None
+    def _section_content(self, sec: propmod.Section) -> tuple[str | None, str | None]:
         if sec.status == propmod.ACCEPTED:
             target_path = self.root / sec.target
             shown = _read_text(target_path) if target_path.is_file() else None
-            if shown is None:
-                problem = "目标文件暂时无法读取"
-        else:
-            shown, problem = propmod.preview(self.root, sec)
+            return shown, (None if shown is not None else "目标文件暂时无法读取")
+        return propmod.preview(self.root, sec)
 
+    def _section_fields(self, sec: propmod.Section) -> dict:
+        shown, problem = self._section_content(sec)
         meta: dict[str, str] | None = None
         body = shown or ""
         if shown is not None:
@@ -1186,15 +1206,34 @@ class WebApp:
                 meta, body = fmt.parse_frontmatter(shown)
             except fmt.FormatError:
                 meta, body = None, shown
-        title = (meta or {}).get("description", "") or _first_heading(body)
+        return {
+            "index": sec.index,
+            "kind": sec.kind,
+            "label": sec.label,
+            "target": sec.target,
+            "status": sec.status,
+            "description": (meta or {}).get("description", "") or _first_heading(body),
+            "body": body,
+            "diff": list(sec.diff) if sec.diff is not None else [],
+            "problem": problem,
+            "content_available": shown is not None,
+        }
+
+    def _section_card(self, name: str, sec: propmod.Section) -> str:
+        fields = self._section_fields(sec)
+        problem = fields["problem"]
+        shown = fields["content_available"]
+        title = fields["description"]
+        badge = (f'<span class="badge {_esc(sec.status)}">'
+                 f'{_esc(_status_label(sec.status))}</span>')
         head = (f'<div class="head"><span class="tag">{_esc(sec.label)}</span>'
                 + (f"<strong>{_esc(title)}</strong>" if title else "") + badge + "</div>")
         status_note = ('<p class="sub">已应用。下面显示目标文件的当前内容。</p>'
                        if sec.status == propmod.ACCEPTED else "")
         problem_html = (f'<p class="notice bad">无法自动应用：{_esc(problem)}</p>'
                         if problem else "")
-        rendered = (f'<div class="proposal-body">{self._render_text(body, sec.target)}</div>'
-                    if shown is not None else "")
+        rendered = (f'<div class="proposal-body">{self._render_text(fields["body"], sec.target)}</div>'
+                    if shown else "")
         diff_html = ""
         if sec.diff is not None:
             diff_html = ('<details><summary>查看补丁</summary>'
@@ -1229,6 +1268,94 @@ class WebApp:
         except propmod.ProposalError as e:
             return 400, str(e)
         return 303, f"{_href('proposals', name)}?done={action}"
+
+    # ----- JSON API（桌面客户端） -----
+
+    def api_status(self):
+        vault = self.root
+        commits = load_commits(vault, limit=1)
+        state = load_state(vault)
+        proposals = load_proposals(vault)
+        errors, warnings, issues_ok = vault_issues(vault)
+        archive = load_archive(self.cfg.archive)
+        reports = load_reports(self.cfg.reports, limit=1000)
+        files = sum(stat.files for stats in archive.values() for stat in stats)
+        size = sum(stat.size for stats in archive.values() for stat in stats)
+        latest = max((stat.latest for stats in archive.values() for stat in stats
+                      if stat.latest is not None), default=None)
+        commit = commits[0] if commits else None
+        return _json({
+            "ok": True,
+            "generated_at": int(time.time()),
+            "vault": {
+                "notes": len(load_notes(vault)),
+                "errors": errors,
+                "warnings": warnings,
+                "check_ok": issues_ok,
+                "sync_conflicts": count_sync_conflicts(vault),
+                "last_commit": ({"short": commit.short, "full": commit.full,
+                                 "date": commit.date, "subject": commit.subject}
+                                if commit else None),
+            },
+            "dream": {"last_run": state.get("last_run") or None,
+                      "reports": len(reports)},
+            "proposals": {"files": len(proposals),
+                          "pending": sum(p.pending for p in proposals),
+                          "total": sum(p.total for p in proposals)},
+            "archive": {"devices": len(archive), "files": files,
+                        "size": size, "latest": latest},
+            "syncthing": syncthing.summarize(),
+        })
+
+    def api_proposals(self):
+        items = []
+        for proposal in load_proposals(self.root):
+            path = self.resolve_proposal(proposal.name)
+            text = _read_text(path) if path is not None else None
+            sections = propmod.parse_sections(text or "")
+            items.append({
+                "name": proposal.name,
+                "title": proposal.title,
+                "mtime": proposal.mtime,
+                "pending": proposal.pending,
+                "total": proposal.total,
+                "sections": [
+                    {key: value for key, value in self._section_fields(sec).items()
+                     if key not in ("body", "diff")}
+                    for sec in sections
+                ],
+            })
+        return _json({"ok": True, "proposals": items})
+
+    def api_proposal(self, name: str):
+        path = self.resolve_proposal(name)
+        if path is None:
+            return _json({"ok": False, "error": "提案不存在"}, 404)
+        text = _read_text(path)
+        if text is None:
+            return _json({"ok": False, "error": "提案无法读取"}, 404)
+        sections = propmod.parse_sections(text)
+        return _json({
+            "ok": True,
+            "name": path.name,
+            "title": _first_heading(text) or path.stem,
+            "sections": [self._section_fields(sec) for sec in sections],
+        })
+
+    def api_decide(self, name: str, index: int, action: str):
+        if action not in ("accept", "reject"):
+            return _json({"ok": False, "error": "未知操作"}, 400)
+        try:
+            result = propmod.decide(self.root, name, index, action)
+        except propmod.ProposalNotFound as e:
+            return _json({"ok": False, "error": str(e)}, 404)
+        except propmod.ProposalConflict as e:
+            return _json({"ok": False, "error": str(e)}, 409)
+        except propmod.ProposalError as e:
+            return _json({"ok": False, "error": str(e)}, 400)
+        return _json({"ok": True, "action": result.action,
+                      "target": result.target, "proposal": result.proposal,
+                      "index": result.index})
 
     # ----- 辅助 -----
 
@@ -1319,9 +1446,10 @@ def _make_handler(app: WebApp):
             self._send(status, ctype, body, head=head)
 
         def _handle_post(self, app: WebApp, path: str, *, head: bool) -> None:
-            """唯一的写入口：/proposals/<name>/decision。"""
-            match = _DECISION_RE.match(path)
-            if match is None:
+            """写入口：网页表单决定与客户端 JSON 决定。"""
+            form_match = _DECISION_RE.match(path)
+            api_match = _API_DECISION_RE.match(path)
+            if form_match is None and api_match is None:
                 self.close_connection = True
                 self._send(405, HTML_TYPE, app.error_page(405, "只支持 GET/HEAD"),
                            head=head, extra=(("Allow", "GET, HEAD"),))
@@ -1333,6 +1461,9 @@ def _make_handler(app: WebApp):
                     self.close_connection = True
                     self._send(403, HTML_TYPE, app.error_page(403, "拒绝跨站请求"), head=head)
                     return
+            if api_match is not None:
+                self._handle_api_post(app, api_match.group(1), head=head)
+                return
             ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
             if ctype != "application/x-www-form-urlencoded":
                 self.close_connection = True
@@ -1355,12 +1486,47 @@ def _make_handler(app: WebApp):
             except (ValueError, UnicodeError):
                 self._send(400, HTML_TYPE, app.error_page(400, "请求不合法"), head=head)
                 return
-            status, message = app.decide_proposal(match.group(1), form)
+            status, message = app.decide_proposal(form_match.group(1), form)
             if status == 303:
                 self._send(303, TEXT_TYPE, "", head=head,
                            extra=(("Location", message),))
             else:
                 self._send(status, HTML_TYPE, app.error_page(status, message), head=head)
+
+        def _handle_api_post(self, app: WebApp, name: str, *, head: bool) -> None:
+            def fail(status: int, message: str) -> None:
+                payload = json.dumps({"ok": False, "error": message}, ensure_ascii=False)
+                self._send(status, JSON_TYPE, payload, head=head)
+
+            ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            if ctype != "application/json":
+                self.close_connection = True
+                fail(415, "请求格式不支持")
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or "")
+            except ValueError:
+                length = -1
+            if length < 0 or length > 4096:
+                self.close_connection = True
+                fail(411 if length < 0 else 413, "请求长度不合法")
+                return
+            try:
+                data = json.loads(self.rfile.read(length).decode("utf-8"))
+            except (ValueError, UnicodeError):
+                fail(400, "请求不是合法 JSON")
+                return
+            if not isinstance(data, dict):
+                fail(400, "请求参数不完整")
+                return
+            index = data.get("index")
+            action = data.get("action")
+            if (isinstance(index, bool) or not isinstance(index, int)
+                    or not isinstance(action, str)):
+                fail(400, "请求参数不完整")
+                return
+            status, ctype_out, body = app.api_decide(name, index, action)
+            self._send(status, ctype_out, body, head=head)
 
         def _check_auth(self, app: WebApp, path: str, query: dict[str, list[str]],
                         *, head: bool) -> bool:
@@ -1396,6 +1562,12 @@ def _make_handler(app: WebApp):
                     ("Location", location),
                     ("Set-Cookie", cookie.output(header="").strip()),
                 ))
+                return False
+            if path.startswith("/api/"):
+                self._send(401, JSON_TYPE,
+                           json.dumps({"ok": False, "error": "需要访问令牌"},
+                                      ensure_ascii=False),
+                           head=head, extra=(("WWW-Authenticate", "Bearer"),))
                 return False
             self._send(401, HTML_TYPE, app.auth_page(path, query), head=head, extra=(
                 ("WWW-Authenticate", "Bearer"),

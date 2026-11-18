@@ -45,8 +45,23 @@ scripts/web.sh --vault ~/memory-vault --archive ~/transcript-archive
 | `--host` | `AMEM_WEB_HOST` | `127.0.0.1` |
 | `--port` | `AMEM_WEB_PORT` | `8787` |
 | `--token` | `AMEM_WEB_TOKEN` | 无 |
+| - | `AMEM_SYNCTHING_URL` | `http://127.0.0.1:8384` |
+| - | `AMEM_SYNCTHING_API_KEY` | 无；未配置时状态接口显示未接入 |
 
 监听非回环地址时必须设置令牌，否则 `amem.web` 拒绝启动。
+
+## JSON API（桌面客户端）
+
+桌面客户端不抓网页，用下面这组接口（`/api/*` 都要求令牌，返回 JSON）：
+
+| 接口 | 内容 |
+|---|---|
+| `GET /api/status` | 连接、同步、整理三组状态：vault 校验与冲突数、最近提交、最近整理、报告数、待处理提案、归档汇总、Syncthing 设备在线情况 |
+| `GET /api/proposals` | 提案列表；每条含类型、目标、状态、说明、冲突标记，不含正文与补丁 |
+| `GET /api/proposals/<文件名>` | 单条详情：说明、正文、diff 行、冲突说明 |
+| `POST /api/proposals/<文件名>/decision` | JSON `{"index": 1, "action": "accept"}`；成功返回 `{"ok": true, ...}`，冲突返回 409 |
+
+Syncthing 摘要由服务器读取本地 REST API 后汇总，API key 不出服务器。未配置 key 时其它状态照常返回，`syncthing.configured` 为 `false`。
 
 ## 服务器部署（systemd 用户单元）
 

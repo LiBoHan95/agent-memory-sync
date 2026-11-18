@@ -549,6 +549,72 @@ class WebAppTest(unittest.TestCase):
         self.assertNotIn("批准并写入", body)
         self.assertIn("驳回", body)
 
+    def test_api_status(self):
+        fake = {"configured": True, "ok": True, "error": None, "devices": [],
+                "online": 1, "total": 2, "updated": 1}
+        with mock.patch.object(web.syncthing, "summarize", return_value=fake):
+            status, ctype, body = self.app.route("/api/status", {})
+        self.assertEqual(status, 200)
+        self.assertIn("application/json", ctype)
+        data = json.loads(body)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["vault"]["notes"], 2)
+        self.assertEqual(data["vault"]["sync_conflicts"], 1)
+        self.assertIsNone(data["vault"]["last_commit"])
+        self.assertEqual(data["dream"]["last_run"], "2026-11-13T04:30:00+08:00")
+        self.assertEqual(data["dream"]["reports"], 2)
+        self.assertEqual(data["proposals"]["files"], 2)
+        self.assertEqual(data["proposals"]["pending"], 2)
+        self.assertEqual(data["archive"]["devices"], 2)
+        self.assertEqual(data["archive"]["files"], 3)
+        self.assertEqual(data["syncthing"]["online"], 1)
+
+    def test_api_proposals_list_and_detail(self):
+        write_rule_proposal(self.vault)
+        status, _, body = self.app.route("/api/proposals", {})
+        self.assertEqual(status, 200)
+        items = json.loads(body)["proposals"]
+        item = next(p for p in items if p["name"] == "2026-11-18.md")
+        self.assertEqual(item["pending"], 1)
+        self.assertEqual(item["sections"][0]["target"], "rules/scope.md")
+        self.assertNotIn("body", item["sections"][0])
+        self.assertNotIn("diff", item["sections"][0])
+        status, _, body = self.app.route("/api/proposals/2026-11-18.md", {})
+        self.assertEqual(status, 200)
+        section = json.loads(body)["sections"][0]
+        self.assertEqual(section["description"], "改动和删除以用户点名的部分为界")
+        self.assertIn("用户点名", section["body"])
+        self.assertTrue(section["diff"])
+        self.assertIsNone(section["problem"])
+        status, _, body = self.app.route("/api/proposals/nope.md", {})
+        self.assertEqual(status, 404)
+        self.assertFalse(json.loads(body)["ok"])
+
+    def test_api_proposal_conflict(self):
+        old = RULE_TEXT + "\n第二段。\n"
+        write_rule_proposal(self.vault, old=old, content=old + "\n第三段。\n")
+        write(self.vault / "rules" / "scope.md", "别的内容\n")
+        status, _, body = self.app.route("/api/proposals/2026-11-18.md", {})
+        self.assertEqual(status, 200)
+        section = json.loads(body)["sections"][0]
+        self.assertIn("不一致", section["problem"])
+        self.assertFalse(section["content_available"])
+
+    def test_api_decide(self):
+        write_rule_proposal(self.vault)
+        status, ctype, body = self.app.api_decide("2026-11-18.md", 1, "accept")
+        self.assertEqual(status, 200)
+        self.assertIn("application/json", ctype)
+        data = json.loads(body)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["target"], "rules/scope.md")
+        self.assertTrue((self.vault / "rules" / "scope.md").exists())
+        status, _, body = self.app.api_decide("2026-11-18.md", 1, "accept")
+        self.assertEqual(status, 409)
+        self.assertFalse(json.loads(body)["ok"])
+        status, _, body = self.app.api_decide("2026-11-18.md", 1, "delete")
+        self.assertEqual(status, 400)
+
     def test_auth_page(self):
         page = self.app.auth_page("/memory", {"raw": ["1"], "a": ["1", "2"]})
         self.assertIn('action="/memory"', page)
@@ -609,6 +675,59 @@ class WebHTTPTest(unittest.TestCase):
             return b"".join(chunks)
         finally:
             sock.close()
+
+    def test_api_requires_token(self):
+        self.start(token="secret")
+        status, headers, body = self.request("GET", "/api/status")
+        self.assertEqual(status, 401)
+        self.assertIn("application/json", headers["content-type"])
+        self.assertFalse(json.loads(body)["ok"])
+
+    def test_api_status_with_token(self):
+        self.start(token="secret")
+        fake = {"configured": False, "ok": False, "error": "未配置",
+                "devices": [], "online": 0, "total": 0, "updated": 1}
+        with mock.patch.object(web.syncthing, "summarize", return_value=fake):
+            status, _, body = self.request(
+                "GET", "/api/status",
+                headers={"Authorization": "Bearer secret"})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["ok"])
+
+    def test_api_decision_accept_without_token(self):
+        self.start()
+        write_rule_proposal(self.vault)
+        status, _, body = self.request(
+            "POST", "/api/proposals/2026-11-18.md/decision",
+            headers={"Content-Type": "application/json",
+                     "Origin": f"http://127.0.0.1:{self.port}"},
+            body=json.dumps({"index": 1, "action": "accept"}).encode())
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["ok"])
+        self.assertTrue((self.vault / "rules" / "scope.md").exists())
+
+    def test_api_decision_bad_json(self):
+        self.start()
+        status, _, body = self.request(
+            "POST", "/api/proposals/2026-11-18.md/decision",
+            headers={"Content-Type": "application/json",
+                     "Origin": f"http://127.0.0.1:{self.port}"},
+            body=b"not json")
+        self.assertEqual(status, 400)
+        self.assertFalse(json.loads(body)["ok"])
+
+    def test_api_decision_conflict(self):
+        self.start()
+        old = RULE_TEXT + "\n第二段。\n"
+        write_rule_proposal(self.vault, old=old, content=old + "\n第三段。\n")
+        write(self.vault / "rules" / "scope.md", "别的内容\n")
+        status, _, body = self.request(
+            "POST", "/api/proposals/2026-11-18.md/decision",
+            headers={"Content-Type": "application/json",
+                     "Origin": f"http://127.0.0.1:{self.port}"},
+            body=json.dumps({"index": 1, "action": "accept"}).encode())
+        self.assertEqual(status, 409)
+        self.assertFalse(json.loads(body)["ok"])
 
     def test_post_decision_accept_without_token(self):
         self.start()
