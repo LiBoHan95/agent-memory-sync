@@ -135,7 +135,7 @@ ssh -N -L 8787:127.0.0.1:8787 user@server
 
 ## 桌面客户端
 
-`amem` 是 Tauri 2 应用（Rust + TypeScript），macOS 已验证，Windows 构建配置就绪。它不内嵌远程页面，只调用受限 JSON API；需要读长文或完整 diff 时用系统浏览器打开带令牌的网页。macOS 安装包在 GitHub Actions 的 `macos-14` runner 上构建，推 `client-v*` 标签会创建 Release。
+`amem` 是 Tauri 2 应用（Rust + TypeScript），macOS 已验证，Windows 构建配置就绪。它不内嵌远程页面，只调用受限 JSON API；需要读长文或完整 diff 时用系统浏览器打开带令牌的网页。macOS 安装包在 GitHub Actions 的 `macos-15` runner 上构建，推 `client-v*` 标签会创建 Release。
 
 ## 项目状态
 

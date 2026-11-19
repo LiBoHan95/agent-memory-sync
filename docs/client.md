@@ -135,7 +135,7 @@ npm run tauri build -- --no-bundle
 
 | 任务 | 平台 | 产物 |
 |---|---|---|
-| macOS universal | `macos-14` | 同时包含 arm64 与 x86_64 的 `.dmg` |
+| macOS universal | `macos-15` | 同时包含 arm64 与 x86_64 的 `.dmg` |
 | Windows x64 | `windows-2022` | NSIS 安装程序 `.exe` |
 
 发版：改 `client/src-tauri/tauri.conf.json` 的版本号，提交后打标签并推送：
