@@ -78,6 +78,19 @@ class AutocommitTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertTrue(git(vault, "log", "-1", "--format=%s").startswith("auto: "))
 
+    def test_commit_ignores_global_signing(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            vault = make_vault(tmp)
+            git(vault, "config", "commit.gpgsign", "true")
+            git(vault, "config", "gpg.program", "false")
+            (vault / "log" / "2026-11.test.md").write_text(
+                "## 2026-11-13 15:00 · test@device\n- [fact] 测试\n", encoding="utf-8")
+            env = {"AMEM_VAULT": str(vault)}
+            r = run([BASH, str(SCRIPTS / "autocommit.sh")], env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertTrue(git(vault, "log", "-1", "--format=%s").startswith("auto: "))
+
             # .dream-state 被 vault 的 .gitignore 排除
             (vault / ".dream-state").write_text("{}", encoding="utf-8")
             r = run([BASH, str(SCRIPTS / "autocommit.sh")], env=env)
@@ -97,11 +110,13 @@ class InstallCheckTest(unittest.TestCase):
             env = {"HOME": str(home), "AMEM_VAULT": str(vault),
                    "AMEM_PROJECT_ROOTS": "", "AMEM_SKIP_SCHEDULER": "1"}
 
-            r = run([BASH, str(SCRIPTS / "install.sh")], env=env)
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "all"], env=env)
             self.assertEqual(r.returncode, 0, r.stderr)
 
             claude_md = (home / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
             self.assertIn("AGENT_PROTOCOL.md", claude_md)
+            self.assertIn("<!-- amem:begin -->", claude_md)
+            self.assertIn("<!-- amem:end -->", claude_md)
             settings = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
             self.assertEqual(settings["theme"], "dark")
             self.assertEqual(settings["cleanupPeriodDays"], 36500)
@@ -117,7 +132,7 @@ class InstallCheckTest(unittest.TestCase):
             self.assertIn(".git", stignore.read_text(encoding="utf-8"))
 
             before = (home / ".claude" / "settings.json").read_text(encoding="utf-8")
-            r = run([BASH, str(SCRIPTS / "install.sh")], env=env)
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "all"], env=env)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual((home / ".claude" / "settings.json").read_text(encoding="utf-8"), before)
             self.assertEqual(stignore.read_text(encoding="utf-8"),
@@ -132,12 +147,305 @@ class InstallCheckTest(unittest.TestCase):
                 self.assertIn(str(SCRIPTS / "archive-transcripts.sh"),
                               plist.read_text(encoding="utf-8"))
 
+    def test_install_auto_only_touches_installed_agents(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            (home / ".claude").mkdir(parents=True)
+            vault = make_vault(tmp)
+            env = {"HOME": str(home), "AMEM_VAULT": str(vault),
+                   "AMEM_PROJECT_ROOTS": "", "AMEM_SKIP_SCHEDULER": "1"}
+
+            r = run([BASH, str(SCRIPTS / "install.sh")], env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("本次接入: claude-code", r.stdout)
+
+            self.assertIn("AGENT_PROTOCOL.md",
+                          (home / ".claude" / "CLAUDE.md").read_text(encoding="utf-8"))
+            for rel in (".codex/AGENTS.md", ".dsh/AGENTS.md", ".gemini/GEMINI.md",
+                        ".pi/agent/AGENTS.md"):
+                self.assertFalse((home / rel).exists(), rel)
+
+    def test_install_updates_block_when_vault_changes(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            (home / ".claude").mkdir(parents=True)
+            base_a = tmp / "a"
+            base_b = tmp / "b"
+            base_a.mkdir()
+            base_b.mkdir()
+            vault_a = make_vault(base_a)
+            vault_b = make_vault(base_b)
+            env = {"HOME": str(home), "AMEM_VAULT": str(vault_a),
+                   "AMEM_PROJECT_ROOTS": "", "AMEM_SKIP_SCHEDULER": "1"}
+
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "claude-code"], env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            claude_md = home / ".claude" / "CLAUDE.md"
+            self.assertIn(str(vault_a), claude_md.read_text(encoding="utf-8"))
+
+            env["AMEM_VAULT"] = str(vault_b)
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "claude-code"], env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            text = claude_md.read_text(encoding="utf-8")
+            self.assertIn(str(vault_b), text)
+            self.assertNotIn(str(vault_a), text)
+            self.assertEqual(text.count("<!-- amem:begin -->"), 1)
+            self.assertEqual(text.count("<!-- amem:end -->"), 1)
+
+    def test_install_ignores_unrelated_protocol_mention(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            (home / ".claude").mkdir(parents=True)
+            claude_md = home / ".claude" / "CLAUDE.md"
+            claude_md.write_text("# 笔记\n参考 /work/AGENT_PROTOCOL.md\n", encoding="utf-8")
+            vault = make_vault(tmp)
+            env = {"HOME": str(home), "AMEM_VAULT": str(vault),
+                   "AMEM_PROJECT_ROOTS": "", "AMEM_SKIP_SCHEDULER": "1"}
+
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "claude-code"], env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            text = claude_md.read_text(encoding="utf-8")
+            self.assertIn("参考 /work/AGENT_PROTOCOL.md", text)
+            self.assertIn(str(vault), text)
+            self.assertEqual(text.count("<!-- amem:begin -->"), 1)
+
+    def test_install_updates_legacy_block_and_settings(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            (home / ".claude").mkdir(parents=True)
+            base_a = tmp / "a"
+            base_b = tmp / "b"
+            base_a.mkdir()
+            base_b.mkdir()
+            vault_a = make_vault(base_a)
+            vault_b = make_vault(base_b)
+            claude_md = home / ".claude" / "CLAUDE.md"
+            claude_md.write_text(
+                "<!-- amem: 共享记忆 -->\n"
+                f"@{vault_a}/AGENT_PROTOCOL.md\n"
+                f"@{vault_a}/MEMORY.md\n"
+                "用户自己的笔记：参见 /work/vault/MEMORY.md，很重要\n",
+                encoding="utf-8",
+            )
+            settings = home / ".claude" / "settings.json"
+            settings.write_text(json.dumps({
+                "permissions": {"additionalDirectories": [str(vault_a)]}
+            }), encoding="utf-8")
+            env = {"HOME": str(home), "AMEM_VAULT": str(vault_b),
+                   "AMEM_PROJECT_ROOTS": "", "AMEM_SKIP_SCHEDULER": "1"}
+
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "claude-code"], env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            text = claude_md.read_text(encoding="utf-8")
+            self.assertNotIn(str(vault_a), text)
+            self.assertNotIn("<!-- amem: 共享记忆 -->", text)
+            self.assertIn(str(vault_b), text)
+            self.assertIn("用户自己的笔记", text)
+            self.assertEqual(text.count("<!-- amem:begin -->"), 1)
+
+            data = json.loads(settings.read_text(encoding="utf-8"))
+            dirs = data["permissions"]["additionalDirectories"]
+            self.assertIn(str(vault_b), dirs)
+            self.assertNotIn(str(vault_a), dirs)
+
+    def test_install_does_not_duplicate_tilde_settings(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            (home / ".claude").mkdir(parents=True)
+            vault = make_vault(home)
+            settings = home / ".claude" / "settings.json"
+            settings.write_text(json.dumps({
+                "permissions": {"additionalDirectories": ["~/vault"]}
+            }), encoding="utf-8")
+            env = {"HOME": str(home), "AMEM_VAULT": str(vault),
+                   "AMEM_PROJECT_ROOTS": "", "AMEM_SKIP_SCHEDULER": "1"}
+
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "claude-code"], env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            data = json.loads(settings.read_text(encoding="utf-8"))
+            self.assertEqual(data["permissions"]["additionalDirectories"], ["~/vault"])
+
+    def test_install_rejects_incomplete_markers(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            (home / ".claude").mkdir(parents=True)
+            claude_md = home / ".claude" / "CLAUDE.md"
+            original = "<!-- amem:begin -->\n用户内容\n"
+            claude_md.write_text(original, encoding="utf-8")
+            vault = make_vault(tmp)
+            env = {"HOME": str(home), "AMEM_VAULT": str(vault),
+                   "AMEM_PROJECT_ROOTS": "", "AMEM_SKIP_SCHEDULER": "1"}
+
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "claude-code"], env=env)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("不配对", r.stderr)
+            self.assertEqual(claude_md.read_text(encoding="utf-8"), original)
+
+    def test_install_preserves_crlf_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            (home / ".claude").mkdir(parents=True)
+            claude_md = home / ".claude" / "CLAUDE.md"
+            original = "用户内容\r\n\r\n".encode()
+            claude_md.write_bytes(original)
+            vault = make_vault(tmp)
+            env = {"HOME": str(home), "AMEM_VAULT": str(vault),
+                   "AMEM_PROJECT_ROOTS": "", "AMEM_SKIP_SCHEDULER": "1"}
+
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "claude-code"], env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            after = claude_md.read_bytes()
+            self.assertTrue(after.startswith(original))
+            self.assertIn(b"<!-- amem:begin -->\r\n", after)
+
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "claude-code"], env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(claude_md.read_bytes(), after)
+
+    def test_install_requires_absolute_vault(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            home.mkdir()
+            env = {"HOME": str(home), "AMEM_VAULT": "relative/vault",
+                   "AMEM_PROJECT_ROOTS": ""}
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--dry-run"], env=env)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("绝对路径", r.stderr)
+
     def test_check_reports_missing_vault(self):
         with tempfile.TemporaryDirectory() as td:
             env = {"AMEM_VAULT": str(Path(td) / "missing"), "AMEM_PROJECT_ROOTS": ""}
             r = run([BASH, str(SCRIPTS / "check-agents.sh")], env=env)
             self.assertEqual(r.returncode, 1)
             self.assertIn("vault 不存在", r.stdout)
+
+
+class ServerSetupScriptTest(unittest.TestCase):
+    def _env(self, tmp: Path) -> dict[str, str]:
+        home = tmp / "home"
+        home.mkdir(exist_ok=True)
+        return {
+            "HOME": str(home),
+            "AMEM_VAULT": str(tmp / "vault"),
+            "AMEM_ARCHIVE": str(tmp / "archive"),
+        }
+
+    def test_dry_run_covers_vault_web_and_syncthing(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            env = self._env(tmp)
+            r = run([BASH, str(SCRIPTS / "setup-server.sh"), "--init-vault", "--dry-run"],
+                    env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("从 vault-template 建立 vault", r.stdout)
+            self.assertIn("amem-web", r.stdout)
+            self.assertIn("添加文件夹 memory-vault", r.stdout)
+            self.assertIn("Web 令牌", r.stdout)
+            self.assertFalse((tmp / "vault").exists())
+
+    def test_refuses_non_vault_directory(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            env = self._env(tmp)
+            vault = tmp / "vault"
+            vault.mkdir()
+            (vault / "keep.txt").write_text("x", encoding="utf-8")
+            r = run([BASH, str(SCRIPTS / "setup-server.sh"), "--init-vault", "--dry-run"],
+                    env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("拒绝初始化", r.stdout)
+            self.assertIn("跳过 Syncthing 文件夹添加", r.stdout)
+            self.assertNotIn("添加文件夹 memory-vault ->", r.stdout)
+
+    def test_dry_run_skips_commit_for_existing_git_vault(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            env = self._env(tmp)
+            vault = make_vault(tmp)
+            (vault / "pending.md").write_text("未提交\n", encoding="utf-8")
+            r = run([BASH, str(SCRIPTS / "setup-server.sh"), "--init-vault", "--dry-run"],
+                    env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("vault 已有提交，跳过 git init/commit", r.stdout)
+            self.assertNotIn("从 vault-template 建立 vault", r.stdout)
+
+    def test_bootstrap_dry_run_delegates_to_setup(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            env = self._env(tmp)
+            env["AMEM_REPO"] = str(ROOT)
+            r = run([BASH, str(SCRIPTS / "bootstrap-server.sh"), "--dry-run"], env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("从 vault-template 建立 vault", r.stdout)
+
+    def test_dry_run_without_vault_skips_web(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = self._env(Path(td))
+            r = run([BASH, str(SCRIPTS / "setup-server.sh"), "--dry-run"], env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("vault 不存在或缺少 AGENT_PROTOCOL.md/MEMORY.md", r.stdout)
+            self.assertIn("跳过启用 amem-web", r.stdout)
+            self.assertIn("跳过启用 amem-dream.timer", r.stdout)
+            self.assertIn("跳过 autocommit", r.stdout)
+
+    def test_dry_run_starts_web_without_git(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            env = self._env(tmp)
+            vault = tmp / "vault"
+            vault.mkdir()
+            (vault / "AGENT_PROTOCOL.md").write_text("p", encoding="utf-8")
+            (vault / "MEMORY.md").write_text("m", encoding="utf-8")
+            r = run([BASH, str(SCRIPTS / "setup-server.sh"), "--dry-run"], env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("缺少 .git", r.stdout)
+            self.assertNotIn("跳过启用 amem-web", r.stdout)
+            self.assertIn("enable amem-web", r.stdout)
+            self.assertIn("跳过启用 amem-dream.timer", r.stdout)
+            self.assertIn("跳过 autocommit", r.stdout)
+
+    def test_dry_run_brackets_ipv6_web_url(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            base_env = self._env(tmp)
+            vault = tmp / "vault"
+            vault.mkdir()
+            (vault / "AGENT_PROTOCOL.md").write_text("p", encoding="utf-8")
+            (vault / "MEMORY.md").write_text("m", encoding="utf-8")
+            for host, expected in [("::1", "[::1]"), ("::", "[::1]"),
+                                   ("0.0.0.0", "127.0.0.1")]:
+                with self.subTest(host=host):
+                    env = dict(base_env, AMEM_WEB_HOST=host)
+                    r = run([BASH, str(SCRIPTS / "setup-server.sh"), "--dry-run"],
+                            env=env)
+                    self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                    self.assertIn(f"curl http://{expected}:8787/healthz", r.stdout)
+                    self.assertIn(f"Web:    http://{expected}:8787/", r.stdout)
+
+    def test_dry_run_updates_legacy_autocommit_line(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            fake = bindir / "crontab"
+            fake.write_text(
+                "#!/bin/sh\n"
+                f'[ "$1" = "-l" ] && echo "0 * * * * {ROOT}/scripts/autocommit.sh"\n'
+                "exit 0\n", encoding="utf-8")
+            fake.chmod(0o755)
+            env = self._env(tmp)
+            make_vault(tmp)
+            env["PATH"] = f"{bindir}:{os.environ.get('PATH', '')}"
+            r = run([BASH, str(SCRIPTS / "setup-server.sh"), "--init-vault", "--dry-run"],
+                    env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("crontab 更新:", r.stdout)
 
 
 class DreamScriptTest(unittest.TestCase):

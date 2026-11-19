@@ -15,7 +15,7 @@ Claude Code、Codex、DeepSeek Harness、Gemini、Pi、Cursor 都会记住一些
 | 自动整理 | 服务器每天回放新日志和转录，低风险变更自动提交，偏好与规则的变更生成提案 |
 | 人工闸门 | 提案里的路径、补丁、格式和疑似密钥都会复核，你逐条批准后才写回 |
 | 查看与批准 | 服务器 Web 看设备活动、记忆文件、归档统计和提案；逐条批准或驳回 |
-| 桌面客户端 | macOS / Windows 的 `amem`，常驻菜单栏看连接、同步和待处理提案 |
+| 桌面客户端 | macOS / Windows 的 `amem`，常驻菜单栏看连接、同步和待处理提案，并选择本机接入的 agent |
 
 ## 怎么工作
 
@@ -56,26 +56,22 @@ vault ──每天 dreaming──▶ 提案（profile/、rules/）
 
 需要：一台 Linux 服务器（示例用 Debian/Ubuntu）、Python 3.10+、Syncthing，以及至少一台日常使用的 macOS / Linux 设备。
 
-### 1. 服务器：建立 vault 和同步中枢
+### 1. 服务器：一键安装
 
 ```bash
-git clone <本仓库> ~/agent-memory-sync
-cp -r ~/agent-memory-sync/vault-template ~/memory-vault
-cd ~/memory-vault && git init && git add -A && git commit -m "init vault"
-
-sudo apt install syncthing
-systemctl --user enable --now syncthing
-loginctl enable-linger "$USER"
+curl -fsSL https://raw.githubusercontent.com/LiBoHan95/agent-memory-sync/main/scripts/bootstrap-server.sh | bash
 ```
 
-在 Syncthing 里把文件夹 ID 设为 `memory-vault`，路径设为 `~/memory-vault`，GUI 只监听本机。给 vault 加每小时自动提交：
+脚本会克隆仓库到 `~/agent-memory-sync`，从模板建立 vault，安装 Syncthing、Node 和 gitleaks，启用 Web 与 dreaming，配置每小时自动提交和 linger，并在首次生成 Web 令牌。
+
+不想直接把远程脚本交给 bash，可以先克隆再执行：
 
 ```bash
-crontab -e
-# 0 * * * * ~/agent-memory-sync/scripts/autocommit.sh
+git clone https://github.com/LiBoHan95/agent-memory-sync ~/agent-memory-sync
+~/agent-memory-sync/scripts/setup-server.sh --init-vault
 ```
 
-完整步骤见 [docs/setup-server.md](docs/setup-server.md)。
+完成后按结尾提示配对 Syncthing 设备；Pi 需要按官方方式单独安装并登录。完整步骤见 [docs/setup-server.md](docs/setup-server.md)。
 
 ### 2. 其他设备：配对并同步
 
@@ -104,7 +100,14 @@ scripts/install.sh
 scripts/check-agents.sh
 ```
 
-`install.sh` 会为 Claude Code、Codex、DeepSeek Harness、Gemini、Pi 写入协议引用，并把 vault 加入 Claude Code 的可访问目录。Cursor 没有全局指令文件，需要在 Settings → Rules → User Rules 手动填入：
+`install.sh` 默认只接入本机已安装的 agent；也可以指定：
+
+```bash
+scripts/install.sh --agents "claude-code codex"   # 只接入这两个
+scripts/install.sh --agents all                   # 全部接入
+```
+
+Cursor 需要手动配置：它没有全局指令文件，在 Settings → Rules → User Rules 填入：
 
 ```markdown
 开始任何任务前，先读取并遵守 ~/memory-vault/AGENT_PROTOCOL.md，再读 ~/memory-vault/MEMORY.md。
@@ -121,7 +124,7 @@ ssh -N -L 8787:127.0.0.1:8787 user@server
 # 浏览器打开 http://127.0.0.1:8787/
 ```
 
-桌面客户端 `amem` 自己维护 SSH 隧道，显示连接、Syncthing 设备、最近整理和待处理提案，令牌存系统钥匙串。安装与构建见 [docs/client.md](docs/client.md)。
+桌面客户端 `amem` 自己维护 SSH 隧道，显示连接、Syncthing 设备、最近整理和待处理提案，令牌存系统钥匙串。它还有一个本机 Agent 页，可以勾选要接入的工具并直接写入协议引用。安装与构建见 [docs/client.md](docs/client.md)。
 
 ### 5. 验证
 
@@ -136,7 +139,7 @@ ssh -N -L 8787:127.0.0.1:8787 user@server
 
 ## 项目状态
 
-已完成：vault 与协议、转录解析与归档、dreaming 与闸门、服务器 Web、桌面客户端（macOS 构建与实机验证）。
+已完成：vault 与协议、转录解析与归档、dreaming 与闸门、服务器 Web、桌面客户端（macOS 构建与实机验证，含 Agent 接入页）。
 
 待补：第二台设备实测、Windows 实机验证、客户端签名与自动更新、`dsh` 转录解析器（`*.jsonl.zstd`）。进度见 [docs/roadmap.md](docs/roadmap.md)。
 

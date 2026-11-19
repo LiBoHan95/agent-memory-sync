@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-type Tab = "status" | "proposals" | "settings";
+type Tab = "status" | "proposals" | "agents" | "settings";
 
 interface Settings {
   mode: string;
@@ -13,6 +13,7 @@ interface Settings {
   local_port: number;
   direct_url: string;
   poll_seconds: number;
+  vault_path: string;
 }
 
 interface SettingsInfo {
@@ -100,11 +101,28 @@ interface ProposalDetail {
   sections: ProposalSection[];
 }
 
+interface AgentView {
+  id: string;
+  name: string;
+  installed: boolean;
+  integrated: boolean;
+  manual: boolean;
+  config_path: string;
+}
+
+interface AgentConfigView {
+  vault_path: string;
+  vault_exists: boolean;
+  vault_ready: boolean;
+  agents: AgentView[];
+}
+
 let currentTab: Tab = "status";
 let settingsInfo: SettingsInfo | null = null;
 let runtime: RuntimeView | null = null;
 let wasConnected = false;
 let proposals: ProposalListItem[] = [];
+let agentConfig: AgentConfigView | null = null;
 let detailName: string | null = null;
 let statusTimer: number | null = null;
 let toastTimer: number | null = null;
@@ -674,6 +692,7 @@ function collectSettings(): Settings {
     local_port: number("local-port", 0),
     direct_url: server.mode === "direct" ? server.direct_url : "",
     poll_seconds: number("poll-seconds", 10),
+    vault_path: previous?.vault_path ?? "~/memory-vault",
   };
 }
 
@@ -699,15 +718,132 @@ async function saveSettings(event: SubmitEvent) {
   }
 }
 
+// ---------- Agent 接入 ----------
+
+function renderAgents() {
+  const config = agentConfig;
+  const list = el("agent-list");
+  const note = el("agent-vault-note");
+  if (!config) {
+    list.innerHTML = `<p class="empty">正在读取…</p>`;
+    return;
+  }
+
+  const input = el<HTMLInputElement>("agent-vault-path");
+  if (document.activeElement !== input) input.value = config.vault_path;
+
+  note.hidden = config.vault_ready;
+  if (!config.vault_ready) {
+    note.className = "notice bad";
+    note.textContent = config.vault_exists
+      ? `vault 不完整：${config.vault_path} 缺少 AGENT_PROTOCOL.md 或 MEMORY.md。`
+      : `vault 不存在：${config.vault_path}。先完成 Syncthing 同步，或改成正确路径。`;
+  }
+
+  list.innerHTML = config.agents.map((agent) => {
+    let status: string;
+    let statusClass = "";
+    if (agent.manual) {
+      status = "手动配置";
+    } else if (!agent.installed) {
+      status = "未安装";
+      statusClass = " is-muted";
+    } else if (agent.integrated) {
+      status = "已接入";
+      statusClass = " is-on";
+    } else {
+      status = "未接入";
+      statusClass = " is-muted";
+    }
+
+    const canToggle = agent.installed && (agent.integrated || config.vault_ready);
+    const control = agent.manual
+      ? `<span class="agent-hint">Settings → Rules → User Rules</span>`
+      : `<button class="switch${agent.integrated ? " is-on" : ""}" type="button"
+           role="switch" aria-checked="${agent.integrated}"
+           aria-label="${esc(agent.name)} 接入"
+           data-agent="${esc(agent.id)}"
+           ${canToggle ? "" : "disabled"}>
+           <span class="switch-knob"></span>
+         </button>`;
+
+    return `
+      <div class="agent-row">
+        <div class="agent-main">
+          <span class="agent-name">${esc(agent.name)}</span>
+          <span class="agent-path mono">${esc(agent.config_path)}</span>
+        </div>
+        <div class="agent-side">
+          <span class="agent-status${statusClass}">${status}</span>
+          ${control}
+        </div>
+      </div>`;
+  }).join("");
+}
+
+async function loadAgents() {
+  try {
+    agentConfig = await invoke<AgentConfigView>("get_agents");
+    renderAgents();
+  } catch (error) {
+    el("agent-list").innerHTML = `<p class="empty">读取失败：${esc(String(error))}</p>`;
+  }
+}
+
+async function toggleAgent(button: HTMLButtonElement) {
+  const id = button.dataset.agent;
+  if (!id) return;
+  const enabled = button.getAttribute("aria-checked") !== "true";
+  button.disabled = true;
+  try {
+    agentConfig = await invoke<AgentConfigView>("set_agent", { id, enabled });
+    renderAgents();
+    toast(enabled ? "已接入，重启对应 agent 后生效" : "已移除接入");
+  } catch (error) {
+    toast(String(error), true);
+    await loadAgents();
+  }
+}
+
+async function saveVaultPath() {
+  const input = el<HTMLInputElement>("agent-vault-path");
+  const button = el<HTMLButtonElement>("btn-save-vault");
+  const previousPath = agentConfig?.vault_path;
+  const hadIntegrated = agentConfig?.agents.some((agent) => agent.integrated) ?? false;
+  button.disabled = true;
+  try {
+    agentConfig = await invoke<AgentConfigView>("save_vault_path", { path: input.value });
+    if (settingsInfo) settingsInfo.settings.vault_path = agentConfig.vault_path;
+    renderAgents();
+    const pathChanged = previousPath !== undefined && previousPath !== agentConfig.vault_path;
+    const notes = [
+      hadIntegrated && pathChanged
+        ? "路径已保存；请重新打开需要接入的 agent 开关"
+        : "vault 路径已保存",
+    ];
+    if (/\s/.test(agentConfig.vault_path)) {
+      notes.push("路径包含空格，部分 agent 可能无法解析引用");
+    }
+    toast(notes.join("。"));
+  } catch (error) {
+    toast(String(error), true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 // ---------- 交互 ----------
 
 function switchTab(requested: Tab) {
-  // 面板只做速览；连接方式和令牌配置留在主窗口。
-  const tab: Tab = IS_PANEL && requested === "settings" ? "status" : requested;
+  // 面板只做速览；连接、Agent 配置留在主窗口。
+  const tab: Tab = IS_PANEL && (requested === "settings" || requested === "agents")
+    ? "status"
+    : requested;
   currentTab = tab;
   const crumbs: Record<Tab, [string, string]> = {
     status: ["使用", "状态"],
     proposals: ["使用", "提案"],
+    agents: ["系统", "Agent"],
     settings: ["系统", "设置"],
   };
   setText("crumb-root", crumbs[tab][0]);
@@ -715,11 +851,13 @@ function switchTab(requested: Tab) {
   document.querySelectorAll<HTMLElement>("[data-tab]").forEach((item) => {
     item.classList.toggle("is-active", item.dataset.tab === tab);
   });
-  for (const name of ["status", "proposals", "settings"]) {
-    el(`tab-${name}`).hidden = name !== tab;
+  for (const name of ["status", "proposals", "agents", "settings"]) {
+    const page = document.getElementById(`tab-${name}`);
+    if (page) page.hidden = name !== tab;
   }
   if (tab === "status") void refreshStatus();
   if (tab === "proposals") void refreshProposals();
+  if (tab === "agents") void loadAgents();
   if (tab === "settings") void loadSettings();
 }
 
@@ -765,6 +903,18 @@ function bind() {
       toast("令牌已清除");
     } catch (error) {
       toast(String(error), true);
+    }
+  });
+
+  el("agent-list").addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-agent]");
+    if (button && !button.disabled) void toggleAgent(button);
+  });
+  el("btn-save-vault").addEventListener("click", () => void saveVaultPath());
+  el("agent-vault-path").addEventListener("keydown", (event) => {
+    if ((event as KeyboardEvent).key === "Enter") {
+      event.preventDefault();
+      void saveVaultPath();
     }
   });
 

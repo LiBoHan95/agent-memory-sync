@@ -22,7 +22,7 @@ if git diff --cached --quiet; then
     exit 0
 fi
 
-git commit -q -m "auto: $(date +%Y-%m-%dT%H:%M:%S%z)"
+git -c commit.gpgsign=false commit -q -m "auto: $(date +%Y-%m-%dT%H:%M:%S%z)"
 
 if [[ "${AMEM_PUSH:-0}" == "1" ]]; then
     git push -q

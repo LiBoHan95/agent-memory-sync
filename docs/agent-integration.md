@@ -2,9 +2,24 @@
 
 目标：每个 agent 启动时都加载 `~/memory-vault/AGENT_PROTOCOL.md`，并能读写 `~/memory-vault/`。
 
-接入可以用 `scripts/install.sh` 自动完成（幂等，改配置前备份为 `<文件>.bak.<日期>`；同时安装每小时转录归档任务）；下面是不用脚本时的手动步骤。
+接入可以用 `scripts/install.sh` 自动完成（幂等，改配置前备份为 `<文件>.bak.<日期>`；同时安装每小时转录归档任务）。默认只接入本机已安装的 agent，也可以用 `--agents "claude-code codex"` 指定，或 `--agents all` 全部接入。macOS / Windows 上还可以在 `amem` 客户端的 Agent 页勾选。
+
+脚本和客户端写入的块都带 `<!-- amem:begin -->` / `<!-- amem:end -->` 标记；关闭接入时只移除 amem 生成的块或旧格式引用，不改动文件里的其他内容。换 vault 路径后重新运行脚本，会移除旧的受管块和旧格式引用，再写入指向新路径的引用。
 
 支持文件引用的 agent 用引用；不支持的用一行指示让 agent 自己去读。
+
+## 选择接入哪些
+
+```bash
+scripts/install.sh                              # 自动：只接入检测到的 agent
+scripts/install.sh --agents "claude-code codex" # 只接入这两个
+scripts/install.sh --agents all                 # 全部写入
+scripts/install.sh --dry-run                    # 只预览
+```
+
+客户端 Agent 页提供同样的开关，改完在对应 agent 重启后生效。
+
+以下是不用脚本时的手动步骤。
 
 ## Claude Code
 
@@ -70,4 +85,4 @@ Cursor 没有全局指令文件。在 Settings → Rules → User Rules 里填�
 - [ ] Pi 是否读取 `~/.pi/agent/AGENTS.md`
 - [ ] 每个 agent 新开会话后问"我是谁、我偏好什么"，能否答对
 
-验证脚本计划放在 `scripts/check-agents.sh`。
+验证用 `scripts/check-agents.sh`。

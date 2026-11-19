@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -47,6 +47,7 @@ struct Settings {
     local_port: u16,
     direct_url: String,
     poll_seconds: u64,
+    vault_path: String,
 }
 
 impl Default for Settings {
@@ -61,6 +62,7 @@ impl Default for Settings {
             local_port: 0,
             direct_url: String::new(),
             poll_seconds: 10,
+            vault_path: "~/memory-vault".into(),
         }
     }
 }
@@ -367,16 +369,23 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn expand_home(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-        if let Ok(home) = std::env::var("USERPROFILE") {
-            return PathBuf::from(home).join(rest);
+fn expand_home_in(home: &Path, path: &str) -> PathBuf {
+    if path == "~" {
+        return home.to_path_buf();
+    }
+    for prefix in ["~/", "~\\"] {
+        if let Some(rest) = path.strip_prefix(prefix) {
+            return home.join(rest);
         }
     }
     PathBuf::from(path)
+}
+
+fn expand_home(path: &str) -> PathBuf {
+    match home_dir() {
+        Ok(home) => expand_home_in(&home, path),
+        Err(_) => PathBuf::from(path),
+    }
 }
 
 fn ssh_available() -> bool {
@@ -483,6 +492,9 @@ fn delete_token() -> Result<(), String> {
 }
 
 fn validate_settings(settings: &Settings) -> Result<(), String> {
+    if settings.vault_path.trim().is_empty() {
+        return Err("请填写本机 vault 路径".into());
+    }
     if !(3..=120).contains(&settings.poll_seconds) {
         return Err("刷新间隔需在 3 到 120 秒之间".into());
     }
@@ -504,6 +516,652 @@ fn validate_settings(settings: &Settings) -> Result<(), String> {
         _ => return Err("未知连接方式".into()),
     }
     Ok(())
+}
+
+// ---------- 本机 agent 接入 ----------
+
+const AGENT_BEGIN: &str = "<!-- amem:begin -->";
+const AGENT_END: &str = "<!-- amem:end -->";
+const LEGACY_MARK: &str = "<!-- amem: 共享记忆 -->";
+const INSTRUCTION_PREFIX: &str = "开始任何任务前，先读取并遵守 ";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AgentStyle {
+    AtRef,
+    Instruction,
+}
+
+struct AgentSpec {
+    id: &'static str,
+    name: &'static str,
+    dir: &'static str,
+    file: &'static str,
+    style: AgentStyle,
+    manual: bool,
+}
+
+const AGENT_SPECS: &[AgentSpec] = &[
+    AgentSpec {
+        id: "claude-code",
+        name: "Claude Code",
+        dir: ".claude",
+        file: ".claude/CLAUDE.md",
+        style: AgentStyle::AtRef,
+        manual: false,
+    },
+    AgentSpec {
+        id: "codex",
+        name: "Codex",
+        dir: ".codex",
+        file: ".codex/AGENTS.md",
+        style: AgentStyle::Instruction,
+        manual: false,
+    },
+    AgentSpec {
+        id: "dsh",
+        name: "DeepSeek Harness",
+        dir: ".dsh",
+        file: "AGENTS.md",
+        style: AgentStyle::Instruction,
+        manual: false,
+    },
+    AgentSpec {
+        id: "gemini",
+        name: "Gemini",
+        dir: ".gemini",
+        file: ".gemini/GEMINI.md",
+        style: AgentStyle::AtRef,
+        manual: false,
+    },
+    AgentSpec {
+        id: "pi",
+        name: "Pi",
+        dir: ".pi/agent",
+        file: ".pi/agent/AGENTS.md",
+        style: AgentStyle::Instruction,
+        manual: false,
+    },
+    AgentSpec {
+        id: "cursor",
+        name: "Cursor",
+        dir: ".cursor",
+        file: "",
+        style: AgentStyle::Instruction,
+        manual: true,
+    },
+];
+
+#[derive(Serialize)]
+struct AgentView {
+    id: String,
+    name: String,
+    installed: bool,
+    integrated: bool,
+    manual: bool,
+    config_path: String,
+}
+
+#[derive(Serialize)]
+struct AgentConfigView {
+    vault_path: String,
+    vault_exists: bool,
+    vault_ready: bool,
+    agents: Vec<AgentView>,
+}
+
+fn home_dir() -> Result<PathBuf, String> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "找不到用户主目录".to_string())
+}
+
+fn vault_dir(settings: &Settings) -> PathBuf {
+    expand_home(settings.vault_path.trim())
+}
+
+fn vault_is_ready(vault: &Path) -> bool {
+    vault.is_dir()
+        && vault.join("AGENT_PROTOCOL.md").is_file()
+        && vault.join("MEMORY.md").is_file()
+}
+
+fn agent_dir(spec: &AgentSpec, home: &Path) -> PathBuf {
+    if spec.id == "dsh" {
+        if let Some(dir) = std::env::var_os("DSH_HOME") {
+            return PathBuf::from(dir);
+        }
+    }
+    home.join(spec.dir)
+}
+
+fn agent_file(spec: &AgentSpec, home: &Path) -> PathBuf {
+    if spec.id == "dsh" {
+        agent_dir(spec, home).join(spec.file)
+    } else {
+        home.join(spec.file)
+    }
+}
+
+fn managed_block(style: AgentStyle, vault: &Path) -> String {
+    let protocol = vault.join("AGENT_PROTOCOL.md").to_string_lossy().to_string();
+    let memory = vault.join("MEMORY.md").to_string_lossy().to_string();
+    let body = match style {
+        AgentStyle::AtRef => format!("@{protocol}\n@{memory}"),
+        AgentStyle::Instruction => {
+            format!("{INSTRUCTION_PREFIX}{protocol}，再读 {memory}。")
+        }
+    };
+    format!("{AGENT_BEGIN}\n{body}\n{AGENT_END}")
+}
+
+fn is_exact_at_ref(line: &str, name: &str) -> bool {
+    let trimmed = line.trim();
+    let Some(path) = trimmed.strip_prefix('@') else {
+        return false;
+    };
+    let slash = format!("/{name}");
+    let backslash = format!("\\{name}");
+    path.len() > name.len() && (path.ends_with(&slash) || path.ends_with(&backslash))
+}
+
+fn is_protocol_ref_shape(line: &str) -> bool {
+    is_exact_at_ref(line, "AGENT_PROTOCOL.md")
+}
+
+fn is_memory_ref_shape(line: &str) -> bool {
+    is_exact_at_ref(line, "MEMORY.md")
+}
+
+/// 旧版脚本生成的指示句是固定句式；只认这个形状，避免把用户笔记当成受管内容。
+fn is_instruction_shape(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with(INSTRUCTION_PREFIX)
+        && trimmed.ends_with("。")
+        && (trimmed.contains("/AGENT_PROTOCOL.md，再读 ")
+            || trimmed.contains("\\AGENT_PROTOCOL.md，再读 "))
+        && (trimmed.contains("/MEMORY.md") || trimmed.contains("\\MEMORY.md"))
+}
+
+/// 找到与 begin 配对的 end；中间出现新的 begin 时视为不配对。
+fn block_end(lines: &[&str], start: usize) -> Option<usize> {
+    for (offset, line) in lines[start..].iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed == AGENT_BEGIN {
+            return None;
+        }
+        if trimmed == AGENT_END {
+            return Some(start + offset);
+        }
+    }
+    None
+}
+
+fn rest_is_blank(lines: &[&str], start: usize) -> bool {
+    lines[start..].iter().all(|line| line.trim().is_empty())
+}
+
+/// begin/end 必须严格配对；不配对时拒绝改动，避免把用户内容夹在块里删掉。
+fn has_malformed_markers(text: &str) -> bool {
+    let mut in_block = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed == AGENT_BEGIN {
+            if in_block {
+                return true;
+            }
+            in_block = true;
+        } else if trimmed == AGENT_END {
+            if !in_block {
+                return true;
+            }
+            in_block = false;
+        }
+    }
+    in_block
+}
+
+/// 移除 amem 写入的块。新格式的 begin/end 块由标记本身拥有，任何路径都移除；
+/// 旧格式只处理可确认由 amem 生成的形状（精确 @ 引用行、固定句式指示句）。
+///
+/// `all_legacy` 为 true 时移除指向任意 vault 的旧格式（用于换路径/重新接入）；
+/// 为 false 时只移除指向当前 vault 的旧格式（用于关闭接入，保留其他 vault 的引用）。
+fn strip_managed_blocks_scoped(text: &str, vault: &Path, all_legacy: bool) -> String {
+    let protocol = vault.join("AGENT_PROTOCOL.md").to_string_lossy().to_string();
+    let memory = vault.join("MEMORY.md").to_string_lossy().to_string();
+    let protocol_ref = format!("@{protocol}");
+    let memory_ref = format!("@{memory}");
+    let instruction = format!("{INSTRUCTION_PREFIX}{protocol}，再读 {memory}。");
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut out: Vec<&str> = Vec::new();
+    let mut index = 0;
+
+    while index < lines.len() {
+        let line = lines[index];
+        let trimmed = line.trim();
+        if trimmed == AGENT_BEGIN {
+            if let Some(end) = block_end(&lines, index + 1) {
+                // 块在文件末尾时，去掉 upsert 加在它前面的一个空行，
+                // 但保留用户原有的尾部空行。
+                if rest_is_blank(&lines, end + 1)
+                    && out.last().is_some_and(|line| line.trim().is_empty())
+                {
+                    out.pop();
+                }
+                index = end + 1;
+            } else {
+                // 孤立的 begin 保留原样，不吞掉后面的用户内容。
+                out.push(line);
+                index += 1;
+            }
+            continue;
+        }
+        if trimmed == LEGACY_MARK {
+            if all_legacy {
+                index += 1;
+                let mut removed_refs = 0;
+                while index < lines.len()
+                    && removed_refs < 2
+                    && (is_protocol_ref_shape(lines[index]) || is_memory_ref_shape(lines[index]))
+                {
+                    index += 1;
+                    removed_refs += 1;
+                }
+                if removed_refs == 0 && index < lines.len() && is_instruction_shape(lines[index]) {
+                    index += 1;
+                }
+            } else {
+                let mut look = index + 1;
+                let mut refs = Vec::new();
+                while look < lines.len()
+                    && refs.len() < 2
+                    && (is_protocol_ref_shape(lines[look]) || is_memory_ref_shape(lines[look]))
+                {
+                    refs.push(lines[look].trim());
+                    look += 1;
+                }
+                let current_pair = refs.len() == 2
+                    && refs.iter().any(|value| *value == protocol_ref)
+                    && refs.iter().any(|value| *value == memory_ref);
+                let current_instruction =
+                    look == index + 1 && lines[look.min(lines.len() - 1)].trim() == instruction;
+                if current_pair || current_instruction {
+                    index = if current_instruction { look + 1 } else { look };
+                    continue;
+                }
+                // 不是当前 vault 的旧块：连同 marker 原样保留。
+                out.push(line);
+                index += 1;
+            }
+            continue;
+        }
+        let managed_instruction = if all_legacy {
+            is_instruction_shape(trimmed)
+        } else {
+            trimmed == instruction
+        };
+        if managed_instruction {
+            index += 1;
+            continue;
+        }
+        let generic_pair = is_protocol_ref_shape(trimmed)
+            && index + 1 < lines.len()
+            && is_memory_ref_shape(lines[index + 1]);
+        let current_pair = trimmed == protocol_ref
+            && index + 1 < lines.len()
+            && lines[index + 1].trim() == memory_ref;
+        if if all_legacy { generic_pair } else { current_pair } {
+            index += 2;
+            continue;
+        }
+        out.push(line);
+        index += 1;
+    }
+
+    if out.is_empty() {
+        String::new()
+    } else {
+        out.concat()
+    }
+}
+
+fn strip_managed_blocks(text: &str, vault: &Path) -> String {
+    strip_managed_blocks_scoped(text, vault, false)
+}
+
+fn strip_all_managed_blocks(text: &str, vault: &Path) -> String {
+    strip_managed_blocks_scoped(text, vault, true)
+}
+
+fn upsert_managed_block(text: &str, block: &str, vault: &Path) -> String {
+    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let block = block.replace('\n', newline);
+    let cleaned = strip_all_managed_blocks(text, vault);
+    if cleaned.trim().is_empty() {
+        return format!("{block}{newline}");
+    }
+    let mut out = cleaned;
+    if !out.ends_with('\n') {
+        out.push_str(newline);
+    }
+    out.push_str(newline);
+    out.push_str(&block);
+    out.push_str(newline);
+    out
+}
+
+fn text_has_managed(text: &str, vault: &Path) -> bool {
+    let protocol = vault.join("AGENT_PROTOCOL.md").to_string_lossy().to_string();
+    let memory = vault.join("MEMORY.md").to_string_lossy().to_string();
+    let protocol_ref = format!("@{protocol}");
+    let memory_ref = format!("@{memory}");
+    let instruction = format!("{INSTRUCTION_PREFIX}{protocol}，再读 {memory}。");
+    let lines: Vec<&str> = text.lines().collect();
+    let mut index = 0;
+
+    while index < lines.len() {
+        let trimmed = lines[index].trim();
+        if trimmed == AGENT_BEGIN {
+            if let Some(end) = block_end(&lines, index + 1) {
+                let body: Vec<&str> = lines[index + 1..end]
+                    .iter()
+                    .map(|line| line.trim())
+                    .collect();
+                let has_refs =
+                    body.contains(&protocol_ref.as_str()) && body.contains(&memory_ref.as_str());
+                if has_refs || body.contains(&instruction.as_str()) {
+                    return true;
+                }
+                index = end + 1;
+                continue;
+            }
+        }
+        if trimmed == instruction {
+            return true;
+        }
+        if trimmed == protocol_ref
+            && index + 1 < lines.len()
+            && lines[index + 1].trim() == memory_ref
+        {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+fn file_has_managed(path: &Path, vault: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    text_has_managed(&text, vault)
+}
+
+fn read_config_text(path: &Path) -> Result<String, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(format!("读取 {} 失败: {error}", path.display())),
+    }
+}
+
+fn backup_file(path: &Path) -> Result<(), String> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    let backup = PathBuf::from(format!("{}.bak.amem", path.display()));
+    match std::fs::symlink_metadata(&backup) {
+        Ok(meta) if meta.file_type().is_file() => return Ok(()),
+        Ok(_) => {
+            return Err(format!(
+                "备份路径已存在且不是普通文件: {}",
+                backup.display()
+            ))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!("检查备份 {} 失败: {error}", backup.display()))
+        }
+    }
+    std::fs::copy(path, &backup)
+        .map(|_| ())
+        .map_err(|error| format!("备份 {} 失败: {error}", path.display()))
+}
+
+fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
+    // 保留符号链接：dotfiles 用户常把 CLAUDE.md/settings.json 链接到版本库，
+    // 直接 rename 会把链接替换成普通文件。
+    let target = match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => std::fs::canonicalize(path)
+            .map_err(|error| format!("解析符号链接失败 {}: {error}", path.display()))?,
+        _ => path.to_path_buf(),
+    };
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("无效路径: {}", target.display()))?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
+    let name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("amem");
+    let tmp = parent.join(format!(".{name}.amem-tmp"));
+    std::fs::write(&tmp, content).map_err(|e| format!("写入临时文件失败: {e}"))?;
+    if let Ok(meta) = std::fs::metadata(&target) {
+        let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    }
+    std::fs::rename(&tmp, &target).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("替换文件失败: {e}")
+    })
+}
+
+fn update_claude_settings(home: &Path, vault: &Path, enabled: bool) -> Result<(), String> {
+    let path = home.join(".claude").join("settings.json");
+    let before = read_config_text(&path)?;
+    let mut data: Value = if before.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(&before).map_err(|e| format!("解析 settings.json 失败: {e}"))?
+    };
+    if !data.is_object() {
+        return Err("settings.json 顶层不是对象".into());
+    }
+
+    if enabled {
+        data["cleanupPeriodDays"] = json!(36500);
+    }
+
+    let vault_text = vault.to_string_lossy().to_string();
+    if enabled {
+        let perms_value = data
+            .as_object_mut()
+            .unwrap()
+            .entry("permissions".to_string())
+            .or_insert_with(|| json!({}));
+        if perms_value.is_null() {
+            *perms_value = json!({});
+        }
+        let perms = perms_value.as_object_mut().ok_or("permissions 不是对象")?;
+        let dirs_value = perms
+            .entry("additionalDirectories".to_string())
+            .or_insert_with(|| json!([]));
+        if dirs_value.is_null() {
+            *dirs_value = json!([]);
+        }
+        let dirs = dirs_value
+            .as_array_mut()
+            .ok_or("permissions.additionalDirectories 不是数组")?;
+        // 换 vault 后清掉其他 amem vault 的旧权限，只保留当前 vault。
+        dirs.retain(|value| {
+            let Some(text) = value.as_str() else {
+                return true;
+            };
+            expand_home_in(home, text).as_path() == vault
+                || !vault_is_ready(&expand_home_in(home, text))
+        });
+        if !dirs
+            .iter()
+            .any(|value| {
+                value
+                    .as_str()
+                    .is_some_and(|text| expand_home_in(home, text).as_path() == vault)
+            })
+        {
+            dirs.push(json!(vault_text));
+        }
+    } else if let Some(perms_value) = data.get_mut("permissions") {
+        if !perms_value.is_null() {
+            let perms = perms_value.as_object_mut().ok_or("permissions 不是对象")?;
+            if let Some(dirs_value) = perms.get_mut("additionalDirectories") {
+                if !dirs_value.is_null() {
+                    let dirs = dirs_value
+                        .as_array_mut()
+                        .ok_or("permissions.additionalDirectories 不是数组")?;
+                    dirs.retain(|value| {
+                        !value
+                            .as_str()
+                            .is_some_and(|text| expand_home_in(home, text).as_path() == vault)
+                    });
+                }
+            }
+        }
+    }
+
+    let after = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?
+    );
+    if before != after {
+        backup_file(&path)?;
+        write_atomic(&path, &after)?;
+    }
+    Ok(())
+}
+
+fn agent_views(settings: &Settings) -> Result<AgentConfigView, String> {
+    let home = home_dir()?;
+    let vault = vault_dir(settings);
+    let agents = AGENT_SPECS
+        .iter()
+        .map(|spec| {
+            let dir = agent_dir(spec, &home);
+            let file = agent_file(spec, &home);
+            let installed = dir.is_dir();
+            let integrated = !spec.manual && file.is_file() && file_has_managed(&file, &vault);
+            AgentView {
+                id: spec.id.to_string(),
+                name: spec.name.to_string(),
+                installed,
+                integrated,
+                manual: spec.manual,
+                config_path: if spec.manual {
+                    dir.display().to_string()
+                } else {
+                    file.display().to_string()
+                },
+            }
+        })
+        .collect();
+    Ok(AgentConfigView {
+        vault_path: settings.vault_path.clone(),
+        vault_exists: vault.is_dir(),
+        vault_ready: vault_is_ready(&vault),
+        agents,
+    })
+}
+
+fn set_agent_enabled(settings: &Settings, id: &str, enabled: bool) -> Result<(), String> {
+    let spec = AGENT_SPECS
+        .iter()
+        .find(|spec| spec.id == id)
+        .ok_or_else(|| "未知 agent".to_string())?;
+    if spec.manual {
+        return Err(format!("{} 没有全局指令文件，需要手动配置", spec.name));
+    }
+    let home = home_dir()?;
+    let vault = vault_dir(settings);
+    let dir = agent_dir(spec, &home);
+
+    if enabled {
+        if !vault_is_ready(&vault) {
+            return Err(format!(
+                "vault 不完整（缺少 AGENT_PROTOCOL.md 或 MEMORY.md）: {}",
+                vault.display()
+            ));
+        }
+        if !dir.is_dir() {
+            return Err(format!("未检测到 {}", spec.name));
+        }
+    }
+
+    let file = agent_file(spec, &home);
+    let before = read_config_text(&file)?;
+    if has_malformed_markers(&before) {
+        return Err(format!(
+            "{} 含不完整的 amem 标记（begin/end 不配对），请先手工修复",
+            file.display()
+        ));
+    }
+    let after = if enabled {
+        upsert_managed_block(&before, &managed_block(spec.style, &vault), &vault)
+    } else {
+        strip_managed_blocks(&before, &vault)
+    };
+    let changed = before != after;
+    if changed {
+        backup_file(&file)?;
+    }
+    // 开启时先更新 Claude 设置，解析失败就不写 Agent 文件。
+    if enabled && spec.id == "claude-code" {
+        update_claude_settings(&home, &vault, true)?;
+    }
+    if changed {
+        write_atomic(&file, &after)?;
+    }
+    // 关闭时先移除引用，再清理 settings.json 里的权限。
+    if !enabled && spec.id == "claude-code" {
+        update_claude_settings(&home, &vault, false)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_agents(state: State<'_, AppState>) -> Result<AgentConfigView, String> {
+    let settings = state.settings.lock().unwrap().clone();
+    agent_views(&settings)
+}
+
+#[tauri::command]
+fn set_agent(
+    state: State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<AgentConfigView, String> {
+    let settings = state.settings.lock().unwrap().clone();
+    set_agent_enabled(&settings, &id, enabled)?;
+    agent_views(&settings)
+}
+
+#[tauri::command]
+fn save_vault_path(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<AgentConfigView, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("vault 路径不能为空".into());
+    }
+    if trimmed.contains('\n') || trimmed.contains('\r') {
+        return Err("vault 路径不能包含换行".into());
+    }
+    if !expand_home(trimmed).is_absolute() {
+        return Err("vault 路径需要是绝对路径，或以 ~/ 开头".into());
+    }
+    let mut settings = state.settings.lock().unwrap().clone();
+    settings.vault_path = trimmed.to_string();
+    state.save_settings_file(&settings)?;
+    *state.settings.lock().unwrap() = settings.clone();
+    agent_views(&settings)
 }
 
 fn show_main(app: &AppHandle) {
@@ -931,6 +1589,9 @@ pub fn run() {
             save_settings,
             clear_token,
             get_runtime,
+            get_agents,
+            set_agent,
+            save_vault_path,
             fetch_status,
             fetch_proposals,
             fetch_proposal,
@@ -1026,5 +1687,374 @@ mod tests {
             PathBuf::from(home).join(".ssh/id_ed25519")
         );
         assert_eq!(expand_home("/tmp/key"), PathBuf::from("/tmp/key"));
+    }
+
+    #[test]
+    fn managed_block_is_idempotent_and_removable() {
+        let vault = PathBuf::from("/tmp/vault");
+        let block = managed_block(AgentStyle::AtRef, &vault);
+        let original = "# 用户内容\n";
+        let with_block = upsert_managed_block(original, &block, &vault);
+        assert!(with_block.contains(AGENT_BEGIN));
+        assert!(with_block.contains(AGENT_END));
+        assert_eq!(upsert_managed_block(&with_block, &block, &vault), with_block);
+        assert_eq!(strip_managed_blocks(&with_block, &vault), original);
+    }
+
+    #[test]
+    fn strips_legacy_blocks() {
+        let vault = PathBuf::from("/tmp/vault");
+        let legacy = "before\n<!-- amem: 共享记忆 -->\n\
+@/tmp/vault/AGENT_PROTOCOL.md\n@/tmp/vault/MEMORY.md\nafter\n";
+        assert_eq!(strip_managed_blocks(legacy, &vault), "before\nafter\n");
+
+        let instruction = "开始任何任务前，先读取并遵守 /tmp/vault/AGENT_PROTOCOL.md，\
+再读 /tmp/vault/MEMORY.md。\nkeep\n";
+        assert_eq!(strip_managed_blocks(instruction, &vault), "keep\n");
+
+        let gemini_legacy = "@/tmp/vault/AGENT_PROTOCOL.md\n@/tmp/vault/MEMORY.md\nkeep\n";
+        assert_eq!(strip_managed_blocks(gemini_legacy, &vault), "keep\n");
+    }
+
+    #[test]
+    fn strip_preserves_other_vault_references() {
+        let vault = PathBuf::from("/tmp/vault");
+        let pair = "@/work/vault/AGENT_PROTOCOL.md\n@/work/vault/MEMORY.md\n";
+        assert_eq!(strip_managed_blocks(pair, &vault), pair);
+        let single = "@/work/vault/AGENT_PROTOCOL.md\nkeep\n";
+        assert_eq!(strip_managed_blocks(single, &vault), single);
+        let instruction = "开始任何任务前，先读取并遵守 /work/vault/AGENT_PROTOCOL.md，\
+再读 /work/vault/MEMORY.md。\n";
+        assert_eq!(strip_managed_blocks(instruction, &vault), instruction);
+    }
+
+    #[test]
+    fn legacy_strip_keeps_user_notes_after_marker() {
+        let vault = PathBuf::from("/tmp/vault");
+        let text = "<!-- amem: 共享记忆 -->\n@/tmp/vault/AGENT_PROTOCOL.md\n\
+@/tmp/vault/MEMORY.md\n用户自己的笔记：参见 /work/vault/MEMORY.md，很重要\n";
+        assert_eq!(
+            strip_managed_blocks(text, &vault),
+            "用户自己的笔记：参见 /work/vault/MEMORY.md，很重要\n"
+        );
+    }
+
+    #[test]
+    fn orphan_begin_does_not_swallow_user_content() {
+        let vault = PathBuf::from("/tmp/vault");
+        let text = "<!-- amem:begin -->\n用户内容\n<!-- amem:begin -->\n\
+@/tmp/vault/AGENT_PROTOCOL.md\n@/tmp/vault/MEMORY.md\n<!-- amem:end -->\n";
+        let stripped = strip_managed_blocks(text, &vault);
+        assert!(stripped.contains("用户内容"));
+        assert_eq!(stripped.matches(AGENT_BEGIN).count(), 1);
+        assert!(!stripped.contains(AGENT_END));
+    }
+
+    #[test]
+    fn malformed_markers_are_detected() {
+        assert!(has_malformed_markers("<!-- amem:begin -->\nkeep\n"));
+        assert!(has_malformed_markers("<!-- amem:end -->\n"));
+        assert!(has_malformed_markers(
+            "<!-- amem:begin -->\n<!-- amem:begin -->\n<!-- amem:end -->\n"
+        ));
+        assert!(!has_malformed_markers(
+            "<!-- amem:begin -->\nx\n<!-- amem:end -->\n"
+        ));
+    }
+
+    #[test]
+    fn text_has_managed_requires_managed_shape() {
+        let vault = PathBuf::from("/tmp/vault");
+        assert!(!text_has_managed(
+            "用户笔记：参见 /tmp/vault/AGENT_PROTOCOL.md\n",
+            &vault
+        ));
+        assert!(text_has_managed(
+            "开始任何任务前，先读取并遵守 /tmp/vault/AGENT_PROTOCOL.md，\
+再读 /tmp/vault/MEMORY.md。\n",
+            &vault
+        ));
+        assert!(text_has_managed(
+            "@/tmp/vault/AGENT_PROTOCOL.md\n@/tmp/vault/MEMORY.md\n",
+            &vault
+        ));
+        let block = managed_block(AgentStyle::AtRef, &vault);
+        assert!(text_has_managed(&upsert_managed_block("", &block, &vault), &vault));
+    }
+
+    #[test]
+    fn upsert_replaces_legacy_from_other_vault() {
+        let new = PathBuf::from("/tmp/new-vault");
+        let legacy = "<!-- amem: 共享记忆 -->\n@/tmp/old-vault/AGENT_PROTOCOL.md\n\
+@/tmp/old-vault/MEMORY.md\n用户内容\n";
+        let updated = upsert_managed_block(legacy, &managed_block(AgentStyle::AtRef, &new), &new);
+        assert!(updated.contains("用户内容"));
+        assert!(!updated.contains("/tmp/old-vault/AGENT_PROTOCOL.md"));
+        assert!(updated.contains("/tmp/new-vault/AGENT_PROTOCOL.md"));
+        assert_eq!(updated.matches(AGENT_BEGIN).count(), 1);
+
+        let instruction = "开始任何任务前，先读取并遵守 /tmp/old-vault/AGENT_PROTOCOL.md，\
+再读 /tmp/old-vault/MEMORY.md。\n";
+        let updated =
+            upsert_managed_block(instruction, &managed_block(AgentStyle::Instruction, &new), &new);
+        assert!(!updated.contains("/tmp/old-vault/AGENT_PROTOCOL.md"));
+        assert!(updated.contains("/tmp/new-vault/MEMORY.md"));
+    }
+
+    #[test]
+    fn recognizes_windows_style_legacy_refs() {
+        assert!(is_protocol_ref_shape("@C:\\vault\\AGENT_PROTOCOL.md"));
+        assert!(is_memory_ref_shape("@C:\\vault\\MEMORY.md"));
+        assert!(is_instruction_shape(
+            "开始任何任务前，先读取并遵守 C:\\vault\\AGENT_PROTOCOL.md，\
+再读 C:\\vault\\MEMORY.md。"
+        ));
+        assert!(!is_protocol_ref_shape("@C:\\vault\\notes.md"));
+    }
+
+    #[test]
+    fn upsert_preserves_line_endings_and_trailing_blanks() {
+        let vault = PathBuf::from("/tmp/vault");
+        let block = managed_block(AgentStyle::AtRef, &vault);
+        for original in ["用户内容\r\n\r\n", "用户内容\n\n"] {
+            let with_block = upsert_managed_block(original, &block, &vault);
+            assert_eq!(strip_managed_blocks(&with_block, &vault), original);
+        }
+        let crlf = upsert_managed_block("用户内容\r\n", &block, &vault);
+        assert!(crlf.contains("<!-- amem:begin -->\r\n"));
+        assert!(!crlf.contains("<!-- amem:begin -->\n"));
+    }
+
+    #[test]
+    fn integration_state_follows_vault_path() {
+        let old = PathBuf::from("/tmp/old-vault");
+        let new = PathBuf::from("/tmp/new-vault");
+        let block = managed_block(AgentStyle::AtRef, &old);
+        let text = upsert_managed_block("", &block, &old);
+        assert!(text_has_managed(&text, &old));
+        assert!(!text_has_managed(&text, &new));
+    }
+
+    #[test]
+    fn vault_requires_protocol_and_memory() {
+        let base = std::env::temp_dir().join(format!("amem-vault-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        assert!(!vault_is_ready(&base));
+        std::fs::write(base.join("AGENT_PROTOCOL.md"), "p").unwrap();
+        assert!(!vault_is_ready(&base));
+        std::fs::write(base.join("MEMORY.md"), "m").unwrap();
+        assert!(vault_is_ready(&base));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_preserves_symlinks() {
+        use std::os::unix::fs::symlink;
+        let base = std::env::temp_dir().join(format!("amem-link-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let target = base.join("target.md");
+        let link = base.join("link.md");
+        std::fs::write(&target, "old\n").unwrap();
+        symlink(&target, &link).unwrap();
+        write_atomic(&link, "new\n").unwrap();
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new\n");
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "new\n");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn read_errors_are_not_treated_as_empty() {
+        let base = std::env::temp_dir().join(format!("amem-read-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let dir = base.join("not-a-file");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(read_config_text(&dir).is_err());
+        assert_eq!(read_config_text(&base.join("missing")).unwrap(), "");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn backup_failure_is_reported() {
+        let base = std::env::temp_dir().join(format!("amem-backup-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join("AGENTS.md");
+        std::fs::write(&file, "x\n").unwrap();
+        std::fs::create_dir_all(format!("{}.bak.amem", file.display())).unwrap();
+        assert!(backup_file(&file).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn claude_settings_adds_and_removes_vault() {
+        let base =
+            std::env::temp_dir().join(format!("amem-agent-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join(".claude")).unwrap();
+        let settings = base.join(".claude/settings.json");
+        std::fs::write(&settings, "{\"theme\":\"dark\"}\n").unwrap();
+        let vault = base.join("memory-vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let vault_text = vault.to_string_lossy().to_string();
+
+        update_claude_settings(&base, &vault, true).unwrap();
+        let data: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(data["theme"], "dark");
+        assert_eq!(data["cleanupPeriodDays"], 36500);
+        let dirs = data["permissions"]["additionalDirectories"]
+            .as_array()
+            .unwrap();
+        assert!(dirs.iter().any(|value| value.as_str() == Some(&vault_text)));
+
+        update_claude_settings(&base, &vault, false).unwrap();
+        let data: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(data["cleanupPeriodDays"], 36500);
+        let dirs = data["permissions"]["additionalDirectories"]
+            .as_array()
+            .unwrap();
+        assert!(!dirs.iter().any(|value| value.as_str() == Some(&vault_text)));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn claude_settings_handles_null_fields() {
+        let base =
+            std::env::temp_dir().join(format!("amem-null-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join(".claude")).unwrap();
+        let settings = base.join(".claude/settings.json");
+        let vault = base.join("memory-vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let vault_text = vault.to_string_lossy().to_string();
+
+        std::fs::write(&settings, "{\"permissions\":null}\n").unwrap();
+        update_claude_settings(&base, &vault, true).unwrap();
+        let data: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert!(data["permissions"]["additionalDirectories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value.as_str() == Some(&vault_text)));
+
+        std::fs::write(
+            &settings,
+            "{\"permissions\":{\"additionalDirectories\":null}}\n",
+        )
+        .unwrap();
+        update_claude_settings(&base, &vault, true).unwrap();
+        update_claude_settings(&base, &vault, false).unwrap();
+        let data: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert!(data["permissions"]["additionalDirectories"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn claude_settings_matches_tilde_entries() {
+        let base =
+            std::env::temp_dir().join(format!("amem-tilde-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join(".claude")).unwrap();
+        let vault = base.join("memory-vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let settings = base.join(".claude/settings.json");
+        std::fs::write(
+            &settings,
+            "{\"permissions\":{\"additionalDirectories\":[\"~/memory-vault\"]}}\n",
+        )
+        .unwrap();
+
+        update_claude_settings(&base, &vault, true).unwrap();
+        let data: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        let dirs = data["permissions"]["additionalDirectories"]
+            .as_array()
+            .unwrap();
+        assert_eq!(dirs.len(), 1);
+        assert_eq!(dirs[0], "~/memory-vault");
+
+        update_claude_settings(&base, &vault, false).unwrap();
+        let data: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert!(data["permissions"]["additionalDirectories"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn backup_keeps_first_version() {
+        let base =
+            std::env::temp_dir().join(format!("amem-backup-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join("CLAUDE.md");
+        std::fs::write(&file, "first\n").unwrap();
+        backup_file(&file).unwrap();
+        std::fs::write(&file, "second\n").unwrap();
+        backup_file(&file).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(format!("{}.bak.amem", file.display())).unwrap(),
+            "first\n"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn claude_settings_prunes_other_amem_vaults() {
+        let base =
+            std::env::temp_dir().join(format!("amem-prune-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join(".claude")).unwrap();
+        let old_vault = base.join("old-vault");
+        let new_vault = base.join("new-vault");
+        for vault in [&old_vault, &new_vault] {
+            std::fs::create_dir_all(vault).unwrap();
+            std::fs::write(vault.join("AGENT_PROTOCOL.md"), "p").unwrap();
+            std::fs::write(vault.join("MEMORY.md"), "m").unwrap();
+        }
+        let keep = base.join("notes");
+        std::fs::create_dir_all(&keep).unwrap();
+        let settings = base.join(".claude/settings.json");
+        std::fs::write(
+            &settings,
+            serde_json::to_string(&json!({
+                "permissions": {
+                    "additionalDirectories": [
+                        old_vault.to_string_lossy(),
+                        keep.to_string_lossy()
+                    ]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        update_claude_settings(&base, &new_vault, true).unwrap();
+        let data: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        let dirs = data["permissions"]["additionalDirectories"]
+            .as_array()
+            .unwrap();
+        let paths: Vec<&str> = dirs.iter().filter_map(|value| value.as_str()).collect();
+        assert!(!paths.contains(&old_vault.to_string_lossy().as_ref()));
+        assert!(paths.contains(&new_vault.to_string_lossy().as_ref()));
+        assert!(paths.contains(&keep.to_string_lossy().as_ref()));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -65,6 +65,8 @@ Syncthing 摘要由服务器读取本地 REST API 后汇总，API key 不出服�
 
 ## 服务器部署（systemd 用户单元）
 
+`scripts/setup-server.sh` 会自动完成这一节：生成单元和 `web.env`、启用并重启服务。下面是手工方式，便于自定义路径或排错。
+
 在服务器上、用拥有 vault 的普通用户执行：
 
 ```bash

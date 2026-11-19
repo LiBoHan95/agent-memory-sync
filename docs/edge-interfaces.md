@@ -53,9 +53,11 @@ cd ~/agent-memory-sync && python3 -m amem.dream --vault ~/memory-vault --archive
 
 幂等，可重复运行，改任何配置文件前先备份为 `<文件>.bak.<日期>`。
 
-- 检查 `~/memory-vault` 存在（Syncthing 已同步）。
-- 各 agent 的指令文件里加入协议引用，具体写法见 `docs/agent-integration.md`；已存在就跳过。
-- `~/.claude/settings.json` 设 `cleanupPeriodDays: 36500`，并把 vault 加入 `permissions.additionalDirectories`（用 JSON 解析修改，不要 sed）。
+- 检查 `~/memory-vault` 存在（Syncthing 已同步）；`--vault` 必须是绝对路径，含空格时给出警告。
+- 默认只接入本机已安装的 agent；`--agents auto` 只写已安装的，`--agents all` 或显式列表会为未安装的 agent 创建配置目录并写入。
+- 各 agent 的指令文件里加入带 `<!-- amem:begin -->` / `<!-- amem:end -->` 标记的协议引用，具体写法见 `docs/agent-integration.md`；已存在且指向当前 vault 就跳过，换路径时移除旧块和旧格式引用后重写。标记不配对时拒绝改动并提示手工修复。
+- 客户端 Agent 页复用同一套标记和路径约定；关闭接入时只移除 amem 生成的块或旧格式引用。
+- `~/.claude/settings.json` 设 `cleanupPeriodDays: 36500`，并把 vault 加入 `permissions.additionalDirectories`（用 JSON 解析修改，不要 sed）；开启时清掉其他 amem vault 的旧权限目录。
 - 归档脚本就绪后安装归档定时任务（macOS launchd / Linux cron）；归档目标由 `~/.config/amem/archive.env` 提供。
 - 不读取、不复制任何 agent 配置里的密钥。
 

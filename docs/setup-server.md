@@ -4,22 +4,40 @@
 
 ## 一键部署（推荐）
 
-vault 建好后运行：
+全新 Debian/Ubuntu 服务器，用普通用户执行：
 
 ```bash
-scripts/setup-server.sh --dry-run   # 只预览，不安装
-scripts/setup-server.sh             # 幂等安装，可重复运行
+curl -fsSL https://raw.githubusercontent.com/LiBoHan95/agent-memory-sync/main/scripts/bootstrap-server.sh | bash
 ```
 
-脚本会安装 Syncthing、git、Python、固定版本的 Node 和 gitleaks，写 dreaming 的 systemd timer 和每小时 autocommit cron，并启用 linger。Pi 需要按官方方式单独安装。下面的手工步骤用于理解流程或排错。
+不想直接把远程脚本交给 bash，可以先克隆再运行：
+
+```bash
+git clone https://github.com/LiBoHan95/agent-memory-sync ~/agent-memory-sync
+~/agent-memory-sync/scripts/setup-server.sh --init-vault --dry-run   # 只预览
+~/agent-memory-sync/scripts/setup-server.sh --init-vault             # 幂等安装
+```
+
+脚本会：
+
+- 安装 Syncthing、git、rsync、Python、固定版本的 Node 和 gitleaks；
+- 从 `vault-template` 建立 vault（目录非空且不像 vault 时拒绝覆盖）；已有提交的 vault 不会再次执行 `git add`/commit，避免把未提交改动混成 `init vault`；
+- 启动 Syncthing，并尝试通过 `syncthing cli` 添加 `memory-vault` 文件夹；`--init-vault` 拒绝初始化时跳过添加；已有同名文件夹但路径不同时只提示，不自动改配置；
+- 生成 `amem-web.service` 和 `~/.config/amem/web.env`（权限 600），首次生成令牌并打印一次；
+- 写 dreaming 的 systemd timer 和每小时 autocommit cron，并启用 linger。
+
+脚本不会替你做：Syncthing 设备配对、SSH 免密、Pi 安装与登录、各设备上的 `install.sh`。这些会在结尾列出来。Web 只要求 vault 里存在 `AGENT_PROTOCOL.md` 和 `MEMORY.md`；`.git` 影响 dreaming 的提交和 autocommit。vault 缺少这两个文件时，脚本仍会写入 Web 单元，但跳过启动；补齐后重新运行即可。由 Syncthing 同步来的 vault 即使没有 `.git`，Web 也会启动；dreaming 和 autocommit 需要加 `--init-vault` 或手工 `git init` 后重跑才会启用。下面的手工步骤用于理解流程或排错。
 
 换服务器、备份与恢复见 [migration.md](migration.md)。
 
-## 1. 服务器上建 vault
+## 1. 手工建 vault
+
+一键脚本已包含这一步；手工部署时执行：
 
 ```bash
 git clone <本仓库> ~/agent-memory-sync
-cp -r ~/agent-memory-sync/vault-template ~/memory-vault
+mkdir -p ~/memory-vault
+cp -r ~/agent-memory-sync/vault-template/. ~/memory-vault/
 cd ~/memory-vault && git init && git add -A && git commit -m "init vault"
 ```
 
@@ -75,7 +93,7 @@ crontab -e
 
 ## 5. 记忆库 Web（可选）
 
-部署后可在服务器本机查看各设备活动、归档状态和记忆文件，并在提案页逐条批准或驳回整理提案。按 [web.md](web.md) 安装 systemd 用户单元；默认只监听 `127.0.0.1:8787`，通过 SSH 隧道访问，不暴露公网。
+一键脚本会自动安装并启动 Web，令牌在 `~/.config/amem/web.env`。手工部署或排错见 [web.md](web.md)；默认只监听 `127.0.0.1:8787`，通过 SSH 隧道访问，不暴露公网。
 
 ## 6. 网络
 

@@ -69,6 +69,10 @@
 
           <div class="nav-group">
             <span class="group-label">系统</span>
+            <button class="nav-item" type="button" data-tab="agents">
+              <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 2.5v3M10.5 2.5v3"/><path d="M3 5.5h10v2a5 5 0 0 1-5 5 5 5 0 0 1-5-5z"/><path d="M8 12.5v1"/></svg>
+              Agent
+            </button>
             <button class="nav-item" type="button" data-tab="settings">
               <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/><circle cx="6" cy="4.5" r="1.5"/><circle cx="10" cy="8" r="1.5"/><circle cx="5" cy="11.5" r="1.5"/></svg>
               设置
@@ -173,6 +177,34 @@
                 <p class="sub" id="detail-meta"></p>
                 <div id="detail-sections"></div>
               </div>
+            </section>
+
+            <section class="page" id="tab-agents" hidden>
+              <section class="card">
+                <div class="card-head">
+                  <h2>本机 vault</h2>
+                  <span class="sub">Agent 读取的记忆目录</span>
+                </div>
+                <div class="rows">
+                  <label class="field wide">
+                    <span>路径</span>
+                    <input id="agent-vault-path" autocomplete="off" placeholder="~/memory-vault" />
+                  </label>
+                </div>
+                <div class="card-actions">
+                  <button class="btn primary" type="button" id="btn-save-vault">保存路径</button>
+                </div>
+                <p class="notice bad" id="agent-vault-note" hidden></p>
+              </section>
+
+              <section class="card">
+                <div class="card-head">
+                  <h2>Agent 接入</h2>
+                  <span class="sub">打开开关后写入协议引用</span>
+                </div>
+                <div class="agent-list" id="agent-list"></div>
+                <p class="row-hint">关闭只移除 amem 写入的块，不改动文件里的其他内容；改动在对应 agent 重启后生效。修改 vault 路径后，需要重新打开开关以更新引用。</p>
+              </section>
             </section>
 
             <section class="page" id="tab-settings" hidden>

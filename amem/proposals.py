@@ -294,7 +294,8 @@ def _commit(vault: Path, message: str, paths: list[str]) -> None:
     try:
         subprocess.run(["git", "-C", str(vault), "add", "--", *paths],
                        capture_output=True, timeout=10)
-        subprocess.run(["git", "-C", str(vault), "commit", "-q", "-m", message, "--", *paths],
+        subprocess.run(["git", "-C", str(vault), "-c", "commit.gpgsign=false",
+                        "commit", "-q", "-m", message, "--", *paths],
                        capture_output=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         pass

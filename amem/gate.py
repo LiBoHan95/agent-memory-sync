@@ -310,7 +310,7 @@ def _write(vault: Path, rel: str, data: bytes) -> None:
 def _commit(vault: Path, msg: str, paths: list[str]) -> None:
     _git(vault, "add", "--", *paths)
     if _git(vault, "diff", "--cached", "--name-only", "--", *paths).strip():
-        _git(vault, "commit", "-q", "-m", msg, "--", *paths)
+        _git(vault, "-c", "commit.gpgsign=false", "commit", "-q", "-m", msg, "--", *paths)
 
 
 def render_proposal(changes: list[Change], when: datetime) -> str:

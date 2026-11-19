@@ -21,8 +21,9 @@ amem 是 macOS / Windows 上的瘦客户端：看连接、同步和整理状态�
 │  ├─ 健康检查 / 自动重连（指数退避）       │
 │  ├─ JSON API 客户端（Bearer token）       │
 │  ├─ 设置持久化（config/settings.json）    │
+│  ├─ Agent 配置读写（固定路径、原子替换）  │
 │  └─ 令牌存系统钥匙串                      │
-│ 前端（WebView：状态 / 提案 / 设置）        │
+│ 前端（WebView：状态 / 提案 / Agent / 设置）│
 │  └─ 一键打开系统浏览器                     │
 └───────────────┬──────────────────────────┘
                 │ 127.0.0.1:<本地端口> 或直连 URL
@@ -37,13 +38,16 @@ amem 是 macOS / Windows 上的瘦客户端：看连接、同步和整理状态�
         POST /api/proposals/<name>/decision
 ```
 
-客户端有三页：
+客户端主窗口有四页：
 
 | 页面 | 内容 |
 |---|---|
 | 状态 | 连接状态、延迟、本地端口、最近检查；vault 笔记数、冲突副本、校验结果、最近提交；Syncthing 设备在线列表与最后活跃时间；归档汇总；最近整理、报告数、待处理提案 |
 | 提案 | 提案文件列表；进入后逐条显示说明、目标文件、变更后的正文、补丁，以及「批准并写入 / 驳回」按钮 |
+| Agent | 本机 vault 路径；检测已安装的 Claude Code、Codex、DeepSeek Harness、Gemini、Pi，用开关接入或移除；Cursor 显示手动配置提示 |
 | 设置 | 服务器（`user@主机` 或 `http(s)://地址`，自动判定隧道/直连）、访问令牌；高级里放 SSH 端口、服务器 Web 端口、本地端口、私钥路径；状态刷新间隔 |
+
+Agent 页只改各工具的全局指令文件：开启时写入带 `<!-- amem:begin -->` / `<!-- amem:end -->` 标记的协议引用，关闭时只移除 amem 生成的块或旧格式引用。Claude Code 还会同时维护 `cleanupPeriodDays` 和 `permissions.additionalDirectories`；开启时移除其他 amem vault 的旧权限目录，关闭接入时只移除当前 vault 目录，不撤销 `cleanupPeriodDays`（原值见首次修改前的 `settings.json.bak.amem`）。只有包含 `AGENT_PROTOCOL.md` 和 `MEMORY.md` 的目录才会被视为有效 vault；修改 vault 路径后，已接入的 agent 会显示为未接入，重新打开开关即可把引用改到新路径。路径含空格时会提示，部分 agent 可能无法解析引用。改动在对应 agent 重启后生效。
 
 关闭主窗口不退出程序，收进菜单栏。左键点菜单栏图标弹出面板（状态 / 提案两页，底部可打开主窗口或退出），右键仍是原生菜单（显示主窗口、打开网页、重新连接、退出）。面板贴在图标下方、水平居中；点面板外或切到别的应用时自动收起。设置不放进面板：连接方式、端口和令牌只在主窗口里配置。
 
@@ -87,7 +91,7 @@ macOS 上面板用 `NSPanel`（`tauri-nspanel`）实现，带非激活样式：�
 | macOS | `~/Library/Application Support/cool.cnb.amem.client/settings.json` |
 | Windows | `%APPDATA%\cool.cnb.amem.client\settings.json` |
 
-文件权限在 macOS/Linux 上设为 `600`，内容只有连接参数和刷新间隔。
+文件权限在 macOS/Linux 上设为 `600`，内容只有连接参数、刷新间隔和本机 vault 路径。
 
 ## 本地开发
 
@@ -176,6 +180,7 @@ npm run tauri build
 - 令牌存系统钥匙串，不落配置文件；设置文件只含非敏感连接参数。
 - JSON API 与网页共用同一令牌；`/api/*` 未认证返回 401。令牌泄露的影响与 Web 相同：能读记忆、能改 `profile/`/`rules/` 提案。
 - 客户端只调用固定的 API 路径，没有任意 URL 代理、没有执行远程命令的接口。
+- Agent 页只读写固定的 agent 全局指令路径，不执行本机命令；修改前把原文件备份为 `<文件>.bak.amem`，已有备份时不覆盖，保留首次修改前的版本。
 - 客户端展示的服务器字符串（设备名、提交标题、提案正文）全部做 HTML 转义。
 - 当前 Tauri 配置未启用 CSP（`csp: null`）。前端不加载远程内容，风险较低；后续可收紧到 `default-src 'self'`，并单独放行 Vite 开发服务器的连接。
 - 自动更新未实现；升级需要重新下载安装包。

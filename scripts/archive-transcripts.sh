@@ -171,7 +171,7 @@ while IFS='|' read -r label src dest; do
     if (( REMOTE )) && (( ! DRY_RUN )); then
         if ! ensure_remote_dir "$dest"; then
             failed=1
-            log "FAIL $label -> $dst（无法创建远端目录）"
+            log "FAIL $label -> ${dst}（无法创建远端目录）"
             continue
         fi
     fi
