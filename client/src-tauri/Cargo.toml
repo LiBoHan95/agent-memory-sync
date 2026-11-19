@@ -1,0 +1,33 @@
+[package]
+name = "client"
+version = "0.1.0"
+description = "amem 桌面客户端"
+authors = ["libohan"]
+edition = "2024"
+
+[lib]
+name = "client_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
+urlencoding = "2"
+
+# macOS 菜单栏面板：普通窗口在点击时会让整个 app 激活，且焦点/收起行为不稳定；NSPanel 是系统菜单栏弹层的标准做法。
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "3ffa93ed14e0f8e857e43619b4157f2a685d35a4" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

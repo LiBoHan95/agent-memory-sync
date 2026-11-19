@@ -87,7 +87,7 @@ scripts/check-agents.sh        # 只读检查接入结果
 
 详见 [docs/agent-integration.md](docs/agent-integration.md) 和 [docs/transcript-archive.md](docs/transcript-archive.md)。
 
-### 4. 记忆库 Web（可选）
+### 4. 记忆库 Web 与桌面客户端（可选）
 
 服务器上可安装记忆库 Web，用来看设备活动、记忆文件、git 历史、归档统计和整理报告。提案页会把每条变更渲染成可读的卡片，可以直接「批准并写入」或「驳回」；批准由确定性代码写回 `profile/` 或 `rules/`，不经 agent。默认只监听 `127.0.0.1:8787`，通过 SSH 隧道访问，不暴露公网：
 
@@ -97,6 +97,8 @@ ssh -N -L 8787:127.0.0.1:8787 user@server
 ```
 
 安装步骤和令牌配置见 [docs/web.md](docs/web.md)。
+
+需要常驻看连接与同步状态时，可以装 macOS / Windows 桌面客户端 `amem`。它自己维护 SSH 隧道，显示 Syncthing 设备在线情况、最近整理和待处理提案，并能逐条批准/驳回；详情仍然一键打开网页。构建与安装见 [docs/client.md](docs/client.md)。
 
 ### 5. 验证
 
@@ -118,8 +120,11 @@ docs/
   compatibility.md      资产划分与长期兼容规则
   migration.md          服务器备份、迁移与灾备
   web.md                服务器 Web（查看 + 提案批准/驳回）
+  client.md             桌面客户端（状态、提案、SSH 隧道、构建）
   roadmap.md            分期计划
-.cnb.yml                CNB 流水线：push / PR 时跑测试
+.cnb.yml                CNB 流水线：Python 测试 + 前端构建检查
+.github/workflows/desktop.yml  macOS / Windows 客户端构建与 Release
+client/                  Tauri 2 桌面客户端（Rust + TypeScript）
 amem/                   核心 Python 包（只依赖标准库）
   format.py             记忆文件格式：frontmatter 与 vault 校验、log 读写
   gate.py               写回闸门：A/B/C/拒绝分级、密钥扫描、校验后写回
@@ -137,5 +142,5 @@ scripts/                运维脚本（自动提交、转录归档、dreaming/We
 
 ## 状态
 
-第一期文档与 vault 模板、第二期核心代码、服务器 Web 已完成，见 [docs/roadmap.md](docs/roadmap.md)。
-待补：Codex / Pi 解析器、客户端 Syncthing 配对与各 agent 的实际接入验证。
+第一期文档与 vault 模板、第二期核心代码、服务器 Web、桌面客户端 amem（macOS 已构建验证，Windows 构建已配置）已完成，见 [docs/roadmap.md](docs/roadmap.md)。
+待补：客户端签名与自动更新、Windows 实机验证、第二台设备接入。

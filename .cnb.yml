@@ -1,5 +1,6 @@
-# CNB 云原生构建：push / PR 时跑单元测试。
-# 项目没有构建产物，这里只做 CI 质量门禁，不产出镜像或安装包。
+# CNB 云原生构建：push / PR 时跑 Python 测试与前端构建检查。
+# 原生 macOS / Windows 安装包在 GitHub Actions 上构建（.github/workflows/desktop.yml）：
+# CNB 官方托管节点只有 Linux，无法产出 .dmg / .exe。
 main:
   push:
     - name: test
@@ -11,6 +12,15 @@ main:
             - apt-get update -qq && apt-get install -y -qq --no-install-recommends rsync
             - python3 -m compileall -q amem tests
             - python3 -m unittest discover -s tests -t .
+    - name: client-check
+      docker:
+        image: node:22
+      stages:
+        - name: frontend
+          script:
+            - cd client
+            - npm ci
+            - npm run build
   pull_request:
     - name: test
       docker:
@@ -21,3 +31,12 @@ main:
             - apt-get update -qq && apt-get install -y -qq --no-install-recommends rsync
             - python3 -m compileall -q amem tests
             - python3 -m unittest discover -s tests -t .
+    - name: client-check
+      docker:
+        image: node:22
+      stages:
+        - name: frontend
+          script:
+            - cd client
+            - npm ci
+            - npm run build

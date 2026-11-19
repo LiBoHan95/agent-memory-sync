@@ -2,7 +2,7 @@
 
 服务器上的查看界面：看各设备的同步/活动历史、转录归档状态和记忆文件。以查看为主，唯一的写操作是**逐条批准或驳回 dreaming 生成的提案**；不提供编辑笔记、新建笔记或删除入口。
 
-默认只监听 `127.0.0.1:8787`，通过 SSH 隧道访问；不设计成公网服务。
+默认只监听 `127.0.0.1:8787`，通过 SSH 隧道访问；不设计成公网服务。桌面客户端（见 [client.md](client.md)）复用这里的 JSON API 和令牌。
 
 ## 能看什么
 
@@ -123,7 +123,7 @@ Tailscale 用户可以用 `tailscale serve --bg 8787` 把服务只暴露给 tail
 
 ## 安全边界
 
-- 读接口只接受 `GET`/`HEAD`；唯一的写接口是 `POST /proposals/<name>/decision`，其它 `POST` 与 `PUT`/`DELETE`/`PATCH` 返回 405。
+- 读接口只接受 `GET`/`HEAD`；写接口只有提案决定的表单 POST `/proposals/<name>/decision` 和 JSON POST `/api/proposals/<name>/decision`，其它 `POST` 与 `PUT`/`DELETE`/`PATCH` 返回 405。
 - 提案决定必须已通过令牌认证；未设置令牌时只接受本机回环地址，并要求浏览器提交的 `Origin` 也是回环地址，跨站表单会被拒绝。
 - 批准时目标路径只允许 `profile/` 与 `rules/` 下的 `.md`；拒绝 `..`、绝对路径、符号链接和越界解析。
 - 写回前会把补丁应用到当前文件做上下文比对；文件在提案生成后被改过就返回 409，提案保持 `pending`，不会强写。

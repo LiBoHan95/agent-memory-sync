@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>amem</title>
+    <script>
+      if (new URLSearchParams(location.search).get("panel") === "1") {
+        document.documentElement.dataset.panel = "1";
+      }
+    </script>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="topbar-brand">
+          <div class="brand">
+            <svg class="brand-glyph" viewBox="0 0 44 44" aria-hidden="true">
+              <defs>
+                <mask id="brand-gap">
+                  <rect width="44" height="44" fill="#fff" />
+                  <circle cx="27" cy="27" r="9" fill="none" stroke="#000" stroke-width="5.8" />
+                </mask>
+              </defs>
+              <circle cx="17" cy="17" r="9" fill="none" stroke="currentColor" stroke-width="4.2" mask="url(#brand-gap)" />
+              <circle cx="27" cy="27" r="9" fill="none" stroke="currentColor" stroke-width="4.2" />
+            </svg>
+            <span class="brand-name">amem</span>
+          </div>
+        </div>
+
+        <div class="topbar-main">
+          <div class="breadcrumb">
+            <span id="crumb-root">使用</span>
+            <span class="sep">/</span>
+            <strong id="crumb-page">状态</strong>
+          </div>
+          <div class="panel-tabs">
+            <button class="panel-tab is-active" type="button" data-tab="status">状态</button>
+            <button class="panel-tab" type="button" data-tab="proposals">提案</button>
+          </div>
+          <div class="top-actions">
+            <button class="icon-btn" type="button" id="btn-reconnect" title="重新连接" aria-label="重新连接">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3.2h-3.2"/></svg>
+            </button>
+            <button class="icon-btn" type="button" id="btn-open-web" title="打开网页" aria-label="打开网页">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 2.5h4v4"/><path d="M13.5 2.5 7.8 8.2"/><path d="M12.5 9.5v3a1 1 0 0 1-1 1h-8a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1h3"/></svg>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div class="shell">
+        <aside class="sidebar">
+          <div class="nav-group">
+            <span class="group-label">使用</span>
+            <button class="nav-item is-active" type="button" data-tab="status">
+              <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h3l2-4 2 8 2-4h3"/></svg>
+              状态
+            </button>
+            <button class="nav-item" type="button" data-tab="proposals">
+              <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h6l3 3v8H4z"/><path d="M10 2.5v3h3"/><path d="M6 8h4M6 10.5h4"/></svg>
+              提案<span class="nav-count" id="nav-pending" hidden>0</span>
+            </button>
+          </div>
+
+          <div class="nav-group">
+            <span class="group-label">系统</span>
+            <button class="nav-item" type="button" data-tab="settings">
+              <svg class="nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/><circle cx="6" cy="4.5" r="1.5"/><circle cx="10" cy="8" r="1.5"/><circle cx="5" cy="11.5" r="1.5"/></svg>
+              设置
+            </button>
+          </div>
+
+          <div class="sidebar-foot">
+            <span class="dot idle" id="sidebar-dot"></span>
+            <div class="sidebar-state">
+              <span id="sidebar-state">正在连接</span>
+              <span class="sidebar-port mono" id="sidebar-port">—</span>
+            </div>
+          </div>
+        </aside>
+
+        <main class="main">
+          <div class="content-body">
+            <section class="page" id="tab-status">
+              <section class="card stats-card">
+                <div class="stats">
+                  <div class="stat">
+                    <span class="stat-label">状态</span>
+                    <span class="stat-value conn idle" id="conn-pill"><span class="dot"></span><span>正在连接</span></span>
+                    <span class="stat-sub">端口 <span class="mono" id="conn-port">—</span></span>
+                  </div>
+                  <div class="stat">
+                    <span class="stat-label">延迟</span>
+                    <span class="stat-value" id="conn-latency">—</span>
+                    <span class="stat-sub">检查 <span id="conn-check">—</span></span>
+                  </div>
+                  <div class="stat">
+                    <span class="stat-label">待处理提案</span>
+                    <span class="stat-value" id="dream-pending">—</span>
+                    <span class="stat-sub" id="stat-pending-sub">—</span>
+                  </div>
+                  <div class="stat">
+                    <span class="stat-label">设备在线</span>
+                    <span class="stat-value" id="stat-devices">—</span>
+                    <span class="stat-sub" id="stat-devices-sub">Syncthing</span>
+                  </div>
+                </div>
+                <p class="notice" id="conn-error" hidden></p>
+              </section>
+
+              <section class="card">
+                <div class="card-head">
+                  <h2>整理</h2>
+                  <button class="btn quiet" type="button" data-goto="proposals">查看提案</button>
+                </div>
+                <div class="rows">
+                  <div class="row"><span class="row-label">最近整理</span><span class="row-value" id="dream-last">—</span></div>
+                  <div class="row"><span class="row-label">报告</span><span class="row-value" id="dream-reports">—</span></div>
+                  <div class="row"><span class="row-label">待处理提案</span><span class="row-value" id="dream-pending-row">—</span></div>
+                </div>
+              </section>
+
+              <section class="card">
+                <div class="card-head">
+                  <h2>同步</h2>
+                  <span class="sub" id="status-updated"></span>
+                </div>
+                <div class="rows">
+                  <div class="row"><span class="row-label">笔记</span><span class="row-value" id="sync-notes">—</span></div>
+                  <div class="row"><span class="row-label">冲突副本</span><span class="row-value" id="sync-conflicts">—</span></div>
+                  <div class="row"><span class="row-label">校验</span><span class="row-value" id="sync-check">—</span></div>
+                  <div class="row">
+                    <span class="row-label">归档</span>
+                    <span class="row-value row-stack"><span id="archive-summary">—</span><span class="row-sub" id="archive-size"></span></span>
+                  </div>
+                </div>
+                <div class="commit" id="last-commit" hidden></div>
+                <div class="section-label"><span>Syncthing 设备</span><span id="syncthing-summary">—</span></div>
+                <ul class="device-list" id="syncthing-list"></ul>
+                <p class="notice" id="syncthing-note" hidden></p>
+              </section>
+            </section>
+
+            <section class="page" id="tab-proposals" hidden>
+              <div class="page-bar">
+                <p class="page-desc" id="proposal-summary">正在读取</p>
+                <button class="btn quiet" type="button" id="btn-refresh-proposals">刷新</button>
+              </div>
+
+              <section class="card list-card" id="proposal-list-card">
+                <div id="proposal-list" class="proposal-list"></div>
+                <p class="empty" id="proposal-empty" hidden>没有待处理的提案。</p>
+              </section>
+
+              <p class="empty offline" id="proposal-offline" hidden>
+                尚未连接服务器，或访问令牌未配置。先在设置里完成连接。
+              </p>
+
+              <div id="proposal-detail" hidden>
+                <div class="detail-head">
+                  <button class="btn quiet" type="button" id="btn-back">← 提案</button>
+                  <div class="actions">
+                    <button class="btn quiet" type="button" id="btn-open-proposal">在网页中打开</button>
+                    <button class="btn quiet" type="button" id="btn-refresh-detail">刷新</button>
+                  </div>
+                </div>
+                <h1 class="detail-title" id="detail-title"></h1>
+                <p class="sub" id="detail-meta"></p>
+                <div id="detail-sections"></div>
+              </div>
+            </section>
+
+            <section class="page" id="tab-settings" hidden>
+              <form class="settings" id="settings-form">
+                <section class="card">
+                  <div class="card-head">
+                    <h2>连接</h2>
+                  </div>
+                  <div class="rows">
+                    <label class="field wide">
+                      <span>服务器</span>
+                      <input id="server-address" autocomplete="off" placeholder="ubuntu@主机 或 https://地址" />
+                    </label>
+                    <label class="field wide">
+                      <span>访问令牌</span>
+                      <input id="token-input" type="password" autocomplete="off" />
+                    </label>
+                  </div>
+                  <details class="advanced">
+                    <summary>高级</summary>
+                    <label class="field"><span>SSH 端口</span><input id="ssh-port" type="number" min="1" max="65535" /></label>
+                    <label class="field"><span>服务器 Web 端口</span><input id="remote-port" type="number" min="1" max="65535" /></label>
+                    <label class="field"><span>本地端口</span><input id="local-port" type="number" min="0" max="65535" /></label>
+                    <p class="row-hint">本地端口填 0 表示自动选择空闲端口。</p>
+                    <label class="field"><span>私钥路径</span><input id="ssh-key" autocomplete="off" placeholder="留空使用 ssh 默认密钥" /></label>
+                  </details>
+                  <p class="notice" id="ssh-note" hidden></p>
+                  <div class="card-actions">
+                    <button class="btn danger-quiet" type="button" id="btn-clear-token">清除已保存令牌</button>
+                  </div>
+                </section>
+
+                <section class="card">
+                  <div class="card-head">
+                    <h2>刷新</h2>
+                  </div>
+                  <div class="rows">
+                    <label class="field narrow">
+                      <span>状态刷新间隔</span>
+                      <input id="poll-seconds" type="number" min="3" max="120" />
+                    </label>
+                  </div>
+                </section>
+
+                <div class="settings-actions">
+                  <button class="btn primary" type="submit" id="btn-save-settings">保存并重新连接</button>
+                  <button class="btn quiet" type="button" id="btn-settings-reconnect">仅重新连接</button>
+                  <span class="sub" id="settings-flash"></span>
+                </div>
+              </form>
+
+              <p class="sub version" id="version-note"></p>
+            </section>
+          </div>
+        </main>
+      </div>
+
+      <footer class="panel-footer">
+        <button class="panel-link" type="button" id="btn-panel-main">打开主窗口</button>
+        <button class="panel-link" type="button" id="btn-panel-quit">退出</button>
+      </footer>
+    </div>
+
+    <div id="modal-root"></div>
+    <div class="toast" id="toast" hidden></div>
+  </body>
+</html>
