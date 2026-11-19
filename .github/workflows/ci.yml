@@ -1,0 +1,56 @@
+name: ci
+
+# 日常质量门禁：Python 单元测试 + 客户端前端构建检查。
+# 原生安装包由 desktop.yml 在 macOS / Windows runner 上构建。
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: python tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 转录归档相关测试会调用 rsync。
+      - name: install rsync
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends rsync
+
+      - name: compile
+        run: python3 -m compileall -q amem tests
+
+      - name: test
+        run: python3 -m unittest discover -s tests -t .
+
+  client:
+    name: client build
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - run: npm ci
+      - run: npm run build

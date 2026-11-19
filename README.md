@@ -1,19 +1,60 @@
 # agent-memory-sync
 
-让多台设备上的多个 agent（Claude Code、Codex、DeepSeek Harness、Cursor、Gemini、Pi 等）共享同一份关于用户的记忆：你是谁、偏好什么、在做哪些项目。
+让多个 agent、多台设备共享同一份关于你的记忆。
 
-## 核心思路
+Claude Code、Codex、DeepSeek Harness、Gemini、Pi、Cursor 都会记住一些东西，但它们各记各的：换一个工具、换一台设备，就要把「我是谁、我偏好什么、我在做什么」重新讲一遍。这个项目把记忆从 agent 里拿出来，放进一份你自己拥有的 Markdown 仓库，让所有 agent 通过同一份协议读写。
 
-- **记忆只有一份**：一个 Markdown 仓库（vault），放在自己的服务器上，各设备用 Syncthing 同步。
-- **agent 只是客户端**：每个 agent 的全局指令文件引用同一份 `AGENT_PROTOCOL.md`，按协议读写 vault。
-- **注入的是索引**：启动时只加载 `MEMORY.md`（200 行以内），细节按需读取。
-- **检索层可选**：mem0 / Hindsight 只作为 vault 的索引，不当事实来源（第三期）。
-- **转录归档**：各 agent 的原始会话转录单向备份到服务器，永久保存。它是唯一不能再生的资产。
-- **自动整理（dreaming）**：服务器每天回放新日志和转录，低风险变更自动提交，偏好与规则的变更生成提案等你确认（第二期）。
+自托管、纯文本、可 diff、可回滚；核心只依赖 Python 标准库。
 
-## 接入指南
+## 它做什么
 
-最短路径：先在服务器上放好 vault，再让每台设备用 Syncthing 同步它，最后让各 agent 引用它。下面命令以 macOS/Linux 为例，完整说明见对应文档。
+| 能力 | 说明 |
+|---|---|
+| 共享记忆 | 所有设备用 Syncthing 同步同一个 vault；agent 读的是同一份事实 |
+| 会话归档 | 各 agent 的原始转录只增不删地备份到服务器，永久保存 |
+| 自动整理 | 服务器每天回放新日志和转录，低风险变更自动提交，偏好与规则的变更生成提案 |
+| 人工闸门 | 提案里的路径、补丁、格式和疑似密钥都会复核，你逐条批准后才写回 |
+| 查看与批准 | 服务器 Web 看设备活动、记忆文件、归档统计和提案；逐条批准或驳回 |
+| 桌面客户端 | macOS / Windows 的 `amem`，常驻菜单栏看连接、同步和待处理提案 |
+
+## 怎么工作
+
+```
+        Claude Code   Codex   DeepSeek Harness   Gemini   Pi
+              └─────────┴───────────┴────────────┴───────┘
+                                 │ 读 AGENT_PROTOCOL.md，按需读 MEMORY.md
+                                 ▼
+                     vault（纯 Markdown + git）
+                        profile/  rules/
+                        projects/ log/
+                                 ▲
+                                 │ Syncthing 双向同步
+                     设备 A / 设备 B
+
+vault ──每天 dreaming──▶ 提案（profile/、rules/）
+                            │ 你逐条批准
+                            ▼
+                  闸门复核 → 写回 + git commit
+```
+
+- **vault**：一份 Markdown 目录，`profile/` 放身份和偏好，`rules/` 放工作规则，`projects/` 放项目上下文，`log/` 放按设备追加的原始观察。
+- **AGENT_PROTOCOL.md**：各 agent 的全局指令文件只引用它，告诉 agent 什么时候读、怎么写、哪些文件不能直接改。
+- **dreaming**：每天在服务器上复制一份 vault，让 headless agent 只改副本，最后由确定性代码按路径分级写回。
+- **gate**：所有写回都走 `amem/gate.py`，检查路径、补丁上下文、格式和疑似密钥；不通过就留在提案里。
+- **转录归档**：`rsync` 单向备份，不带 `--delete`，agent 清理本地会话也不影响归档。
+
+## 设计原则
+
+- **记忆只有一份**：不把记忆分散到各个 agent 的私有存储里。
+- **agent 只是客户端**：agent 可以读、可以写日志和项目页，但 `profile/`、`rules/` 只能通过提案改。
+- **只注入索引**：启动时读 `MEMORY.md`（控制在 200 行以内），细节按需打开，避免每轮都塞满上下文。
+- **写回有闸门**：路径限定、上下文比对、密钥扫描、格式校验，任何一项不过都不写。
+- **转录只增不删**：它是唯一不能再生的资产。
+- **本地优先**：服务器、Web、归档都在自己的机器上；核心包不引入第三方 Python 依赖。
+
+## 快速开始
+
+需要：一台 Linux 服务器（示例用 Debian/Ubuntu）、Python 3.10+、Syncthing，以及至少一台日常使用的 macOS / Linux 设备。
 
 ### 1. 服务器：建立 vault 和同步中枢
 
@@ -22,42 +63,32 @@ git clone <本仓库> ~/agent-memory-sync
 cp -r ~/agent-memory-sync/vault-template ~/memory-vault
 cd ~/memory-vault && git init && git add -A && git commit -m "init vault"
 
-# Debian/Ubuntu
 sudo apt install syncthing
 systemctl --user enable --now syncthing
-loginctl enable-linger "$USER"     # 未登录时也保持运行
+loginctl enable-linger "$USER"
 ```
 
-在服务器上配置 Syncthing 文件夹：ID 固定为 `memory-vault`，路径为 `~/memory-vault`。GUI 只监听本机，通过 SSH 隧道打开：
-
-```bash
-ssh -L 8384:127.0.0.1:8384 user@server
-```
-
-再给 vault 加每小时自动提交：
+在 Syncthing 里把文件夹 ID 设为 `memory-vault`，路径设为 `~/memory-vault`，GUI 只监听本机。给 vault 加每小时自动提交：
 
 ```bash
 crontab -e
-# 加入下面一行：
-0 * * * * ~/agent-memory-sync/scripts/autocommit.sh
+# 0 * * * * ~/agent-memory-sync/scripts/autocommit.sh
 ```
 
-详见 [docs/setup-server.md](docs/setup-server.md)。
+完整步骤见 [docs/setup-server.md](docs/setup-server.md)。
 
-### 2. 其他设备：配对并同步 vault
-
-macOS 示例（Linux 用发行版的 Syncthing 包）：
+### 2. 其他设备：配对并同步
 
 ```bash
-brew install syncthing
+brew install syncthing          # macOS；Linux 用发行版的包
 brew services start syncthing
 ```
 
-打开 <http://127.0.0.1:8384>，添加服务器为远程设备，接受 `memory-vault` 共享，本地路径设为 `~/memory-vault`。服务器和客户端都确认后，改动会在几秒内双向同步。
+打开 <http://127.0.0.1:8384>，添加服务器为远程设备，接受 `memory-vault` 共享，本地路径设为 `~/memory-vault`。
 
-### 3. 各 agent：引用共享记忆
+### 3. 接入各 agent
 
-先配置转录归档目标；`install.sh` 会顺带安装每小时的归档任务：
+先写归档配置，再跑安装脚本（幂等，改前自动备份）：
 
 ```bash
 mkdir -p ~/.config/amem
@@ -68,79 +99,75 @@ EOF
 chmod 600 ~/.config/amem/archive.env
 
 cd ~/agent-memory-sync
-scripts/install.sh --dry-run   # 先看会改哪些文件
-scripts/install.sh             # 幂等，改前自动备份
-scripts/check-agents.sh        # 只读检查接入结果
+scripts/install.sh --dry-run
+scripts/install.sh
+scripts/check-agents.sh
 ```
 
-`install.sh` 会为 Claude Code、Codex、DeepSeek Harness、Gemini、Pi 写入协议引用或指示句，把 vault 加入 Claude Code 的可访问目录，并设置 `cleanupPeriodDays=36500`，避免转录被自动清理。Cursor 没有全局指令文件，需要在 Settings → Rules → User Rules 手动填入：
+`install.sh` 会为 Claude Code、Codex、DeepSeek Harness、Gemini、Pi 写入协议引用，并把 vault 加入 Claude Code 的可访问目录。Cursor 没有全局指令文件，需要在 Settings → Rules → User Rules 手动填入：
 
 ```markdown
 开始任何任务前，先读取并遵守 ~/memory-vault/AGENT_PROTOCOL.md，再读 ~/memory-vault/MEMORY.md。
 ```
 
-新设备可先跑一次归档预演，确认目标路径：
-
-```bash
-~/agent-memory-sync/scripts/archive-transcripts.sh --dry-run
-```
-
 详见 [docs/agent-integration.md](docs/agent-integration.md) 和 [docs/transcript-archive.md](docs/transcript-archive.md)。
 
-### 4. 记忆库 Web 与桌面客户端（可选）
+### 4. 可选：Web 与桌面客户端
 
-服务器上可安装记忆库 Web，用来看设备活动、记忆文件、git 历史、归档统计和整理报告。提案页会把每条变更渲染成可读的卡片，可以直接「批准并写入」或「驳回」；批准由确定性代码写回 `profile/` 或 `rules/`，不经 agent。默认只监听 `127.0.0.1:8787`，通过 SSH 隧道访问，不暴露公网：
+Web 默认只监听 `127.0.0.1:8787`，通过 SSH 隧道访问：
 
 ```bash
 ssh -N -L 8787:127.0.0.1:8787 user@server
 # 浏览器打开 http://127.0.0.1:8787/
 ```
 
-安装步骤和令牌配置见 [docs/web.md](docs/web.md)。
-
-需要常驻看连接与同步状态时，可以装 macOS / Windows 桌面客户端 `amem`。它自己维护 SSH 隧道，显示 Syncthing 设备在线情况、最近整理和待处理提案，并能逐条批准/驳回；详情仍然一键打开网页。构建与安装见 [docs/client.md](docs/client.md)。
+桌面客户端 `amem` 自己维护 SSH 隧道，显示连接、Syncthing 设备、最近整理和待处理提案，令牌存系统钥匙串。安装与构建见 [docs/client.md](docs/client.md)。
 
 ### 5. 验证
 
-1. 在设备 A 上向 `~/memory-vault/log/` 写一条测试记录。
-2. 几秒内在服务器和设备 B 上看到同一文件。
-3. 分别在设备 A、B 的新会话里问 agent“我是谁、我偏好什么”，确认它能读到 vault。
-4. 在服务器上打开 Web，确认设备活动和归档统计不为空。
+1. 在设备 A 向 `~/memory-vault/log/` 写一条测试记录；
+2. 几秒内在服务器和设备 B 上看到同一文件；
+3. 在设备 A、B 的新会话里问 agent「我是谁、我偏好什么」；
+4. 打开 Web，确认设备活动和归档统计不为空。
 
-## 目录
+## 桌面客户端
 
-```
-docs/
-  architecture.md       架构与设计决定
-  setup-server.md       服务器 + Syncthing + git 部署
-  agent-integration.md  各 agent 接入方法
-  memory-format.md      记忆文件格式规范
-  dreaming.md           自动整理流程与分级
-  transcript-archive.md 转录归档
-  compatibility.md      资产划分与长期兼容规则
-  migration.md          服务器备份、迁移与灾备
-  web.md                服务器 Web（查看 + 提案批准/驳回）
-  client.md             桌面客户端（状态、提案、SSH 隧道、构建）
-  roadmap.md            分期计划
-.cnb.yml                CNB 流水线：Python 测试 + 前端构建检查
-.github/workflows/desktop.yml  macOS / Windows 客户端构建与 Release
-client/                  Tauri 2 桌面客户端（Rust + TypeScript）
-amem/                   核心 Python 包（只依赖标准库）
-  format.py             记忆文件格式：frontmatter 与 vault 校验、log 读写
-  gate.py               写回闸门：A/B/C/拒绝分级、密钥扫描、校验后写回
-  proposals.py          提案解析与批准/驳回：补丁应用、状态标记、写回
-  dream.py              dreaming 主流程：收集增量 → headless agent → 闸门 → 报告
-  render.py             Web 的轻量 Markdown 渲染（安全转义）
-  web.py                服务器 Web：数据加载、页面、令牌认证、HTTP 服务
-  parsers/              各 agent 转录解析器（claude-code、codex、pi）
-  screen.py             可选的转录预筛
-  prompts/dreaming.md   给整理 agent 的指令
-tests/                  测试：python3 -m unittest discover -s tests -t .
-vault-template/         vault 初始模板，部署时复制到 ~/memory-vault
-scripts/                运维脚本（自动提交、转录归档、dreaming/Web 入口、设备接入、状态检查）
+`amem` 是 Tauri 2 应用（Rust + TypeScript），macOS 已验证，Windows 构建配置就绪。它不内嵌远程页面，只调用受限 JSON API；需要读长文或完整 diff 时用系统浏览器打开带令牌的网页。macOS 安装包在 GitHub Actions 的 `macos-14` runner 上构建，推 `client-v*` 标签会创建 Release。
+
+## 项目状态
+
+已完成：vault 与协议、转录解析与归档、dreaming 与闸门、服务器 Web、桌面客户端（macOS 构建与实机验证）。
+
+待补：第二台设备实测、Windows 实机验证、客户端签名与自动更新、`dsh` 转录解析器（`*.jsonl.zstd`）。进度见 [docs/roadmap.md](docs/roadmap.md)。
+
+## 开发
+
+```bash
+python3 -m unittest discover -s tests -t .
+
+cd client
+npm ci
+npm run build          # tsc + vite build
+npm run tauri build    # 本机安装包
 ```
 
-## 状态
+## 文档
 
-第一期文档与 vault 模板、第二期核心代码、服务器 Web、桌面客户端 amem（macOS 已构建验证，Windows 构建已配置）已完成，见 [docs/roadmap.md](docs/roadmap.md)。
-待补：客户端签名与自动更新、Windows 实机验证、第二台设备接入。
+| 文档 | 内容 |
+|---|---|
+| [architecture.md](docs/architecture.md) | 架构与设计决定 |
+| [setup-server.md](docs/setup-server.md) | 服务器、Syncthing、git 部署 |
+| [agent-integration.md](docs/agent-integration.md) | 各 agent 的接入方法 |
+| [memory-format.md](docs/memory-format.md) | 记忆文件格式规范 |
+| [dreaming.md](docs/dreaming.md) | 自动整理流程与分级 |
+| [transcript-archive.md](docs/transcript-archive.md) | 转录归档 |
+| [web.md](docs/web.md) | 服务器 Web |
+| [client.md](docs/client.md) | 桌面客户端 |
+| [migration.md](docs/migration.md) | 备份、迁移与灾备 |
+| [compatibility.md](docs/compatibility.md) | 资产划分与长期兼容规则 |
+| [edge-interfaces.md](docs/edge-interfaces.md) | 边界接口 |
+| [roadmap.md](docs/roadmap.md) | 分期计划 |
+
+## 许可证
+
+[MIT](LICENSE)

@@ -125,31 +125,38 @@ npm run tauri build -- --no-bundle
 
 ## 构建与发布
 
-### 本机构建，上传 CNB Release（默认）
+### GitHub Actions（默认）
 
-安装包在 macOS / Windows 本机构建，然后由脚本上传到 CNB 的 Release：
+`.github/workflows/desktop.yml` 在 GitHub 托管的 runner 上构建两个平台：
+
+| 任务 | 平台 | 产物 |
+|---|---|---|
+| macOS universal | `macos-14` | 同时包含 arm64 与 x86_64 的 `.dmg` |
+| Windows x64 | `windows-2022` | NSIS 安装程序 `.exe` |
+
+发版：改 `client/src-tauri/tauri.conf.json` 的版本号，提交后打标签并推送：
 
 ```bash
-scripts/publish-client.sh              # 构建 + 上传
-scripts/publish-client.sh --no-build   # 只上传已有产物
-scripts/publish-client.sh --dry-run    # 只打印版本、标签和待上传文件
+git tag client-v0.1.0
+git push origin client-v0.1.0
 ```
 
-脚本先读 `client/src-tauri/tauri.conf.json` 的版本号，再执行 `npm run tauri build`，把 `bundle/dmg/*.dmg`（Windows 是 `bundle/nsis/*.exe`）上传到标签为 `client-v<版本>` 的 CNB Release；Release 不存在会创建，同一文件名会被覆盖。
+标签触发构建，两个平台的产物都上传到同名 GitHub Release。也可以在 Actions 页面手动 `Run workflow`，只构建并上传 Artifacts，不创建 Release；PR 只跑前端检查。
 
-上传需要 CNB 访问令牌：个人设置 → 访问令牌 → 添加访问令牌，授权范围勾选发布版本的读写（`repo-release:rw`）。令牌放进环境变量 `CNB_TOKEN`，或写到 `~/.config/amem/cnb.env` 并 `chmod 600`。`cnb` 命令行自带的登录应用没有这个权限，不能替代访问令牌。
+公开仓库的标准 runner 免费；私有仓库按 GitHub 的每月包含额度计费（macOS 约 $0.062/分钟，Windows 约 $0.010/分钟）。
 
-发版前先把提交推到 CNB：Release 的标签指向远端提交，本地没推送的代码对不上。不想配置令牌时，也可以在 CNB 的「版本」页面手动新建 Release，再把安装包拖进去。
+### 本机构建
 
-### 为什么不在 CNB 上构建
+开发时在本机出安装包：
 
-CNB 官方托管节点只有 Linux 容器（amd64 / arm64），没有 macOS 工具链，产不出 `.dmg`；Windows 安装包也不在官方节点的保障范围内。CNB 根组织可以接入自托管 Mac / Windows 构建机（`runner.namespace: group`），但需要一台常开且能访问 CNB 的机器，当前不采用。
+```bash
+cd client
+npm run tauri build
+```
 
-CNB 的 `.cnb.yml` 保留 `client-check`：push / PR 时在 `node:22` 镜像里执行 `npm ci && npm run build`，拦住 TypeScript 和前端构建错误。Python 单元测试流水线不变。
+产物在 `client/src-tauri/target/release/bundle/`。本机构建不发布；需要发布时走上面的标签流程。
 
-### GitHub Actions（可选）
-
-`.github/workflows/desktop.yml` 仍可用：`macos-14` 构建 universal dmg，`windows-2022` 构建 NSIS exe，推 `client-v*` 标签或手动触发。仓库目前只有 CNB 远端，没有 GitHub 镜像时这条流水线不会运行，仅作为以后有 GitHub 远端时的备选。
+`ci.yml` 在每次 push / PR 时跑 Python 测试和客户端前端构建检查（`tsc + vite build`）。
 
 ## 安装未签名构建
 
@@ -161,7 +168,7 @@ CNB 的 `.cnb.yml` 保留 `client-check`：push / PR 时在 `node:22` 镜像里�
 
 签名需要 Apple Developer ID 证书、公证凭据和 Windows 代码签名证书。配置好之后在 workflow 里加 secrets，并把 `APPLE_SIGNING_IDENTITY` 等传给 Tauri 即可；这不是当前范围。
 
-未签名意味着无法验证二进制来源，只应从本机构建或自己的 CNB Release 下载，不要转发给其他人。
+未签名意味着无法验证二进制来源，只应从本机构建或自己的 GitHub Release 下载，不要转发给其他人。
 
 ## 安全边界
 
