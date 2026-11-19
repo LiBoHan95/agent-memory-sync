@@ -123,50 +123,33 @@ npm run tauri build
 npm run tauri build -- --no-bundle
 ```
 
-## 构建流水线
+## 构建与发布
 
-### GitHub Actions
+### 本机构建，上传 CNB Release（默认）
 
-`.github/workflows/desktop.yml` 构建两个平台：
-
-| 任务 | 平台 | 产物 |
-|---|---|---|
-| macOS universal | `macos-14` | 同时包含 arm64 与 x86_64 的 `.dmg` |
-| Windows x64 | `windows-2022` | NSIS 安装程序 `.exe` |
-
-触发方式：
-
-- 推送 `client-v*` 标签：构建并创建 GitHub Release，附带 `.dmg` 和 `.exe`；
-- 在 Actions 页面手动 `Run workflow`：只构建并上传 artifact；
-- Pull Request 修改 `client/**`：只跑前端 `tsc + vite build`，不消耗 macOS/Windows runner。
-
-发版示例：
+安装包在 macOS / Windows 本机构建，然后由脚本上传到 CNB 的 Release：
 
 ```bash
-git tag client-v0.1.0
-git push origin client-v0.1.0
+scripts/publish-client.sh              # 构建 + 上传
+scripts/publish-client.sh --no-build   # 只上传已有产物
+scripts/publish-client.sh --dry-run    # 只打印版本、标签和待上传文件
 ```
 
-注意：仓库当前只有 CNB 远端（`cnb.cool`），GitHub Actions 只有在仓库存在 GitHub 镜像时才会运行。需要先添加一个 GitHub remote 并推送标签：
+脚本先读 `client/src-tauri/tauri.conf.json` 的版本号，再执行 `npm run tauri build`，把 `bundle/dmg/*.dmg`（Windows 是 `bundle/nsis/*.exe`）上传到标签为 `client-v<版本>` 的 CNB Release；Release 不存在会创建，同一文件名会被覆盖。
 
-```bash
-git remote add github git@github.com:<owner>/agent-memory-sync.git
-git push github main
-git push github client-v0.1.0
-```
+上传需要 CNB 访问令牌：个人设置 → 访问令牌 → 添加访问令牌，授权范围勾选发布版本的读写（`repo-release:rw`）。令牌放进环境变量 `CNB_TOKEN`，或写到 `~/.config/amem/cnb.env` 并 `chmod 600`。`cnb` 命令行自带的登录应用没有这个权限，不能替代访问令牌。
 
-### CNB 能做什么
+发版前先把提交推到 CNB：Release 的标签指向远端提交，本地没推送的代码对不上。不想配置令牌时，也可以在 CNB 的「版本」页面手动新建 Release，再把安装包拖进去。
 
-**CNB 官方托管节点只有 Linux，无法产出 macOS `.dmg` 或 Windows `.exe`。** 原生包必须在 macOS / Windows runner 上构建，所以客户端产物放在 GitHub Actions（或自建的 macOS / Windows 构建节点）。
+### 为什么不在 CNB 上构建
 
-CNB 的 `.cnb.yml` 仍然增加了 `client-check` 流水线：在 `node:22` 镜像里执行 `npm ci && npm run build`，用于拦住 TypeScript 和前端构建错误；Python 单元测试流水线不变。
+CNB 官方托管节点只有 Linux 容器（amd64 / arm64），没有 macOS 工具链，产不出 `.dmg`；Windows 安装包也不在官方节点的保障范围内。CNB 根组织可以接入自托管 Mac / Windows 构建机（`runner.namespace: group`），但需要一台常开且能访问 CNB 的机器，当前不采用。
 
-如果以后必须把原生构建放在 CNB，只有两条路：
+CNB 的 `.cnb.yml` 保留 `client-check`：push / PR 时在 `node:22` 镜像里执行 `npm ci && npm run build`，拦住 TypeScript 和前端构建错误。Python 单元测试流水线不变。
 
-1. 企业版/自建节点接入 macOS 与 Windows 物理机，按 CNB 的自定义节点方式注册；
-2. 继续用 GitHub Actions，CNB 只做 Linux 侧质量门禁。
+### GitHub Actions（可选）
 
-CNB 的 Linux 容器理论上可以构建 Linux 版 Tauri，但需要安装 `webkit2gtk` 等系统依赖，而且当前钥匙串后端只启用了 macOS/Windows，不在本项目目标内。
+`.github/workflows/desktop.yml` 仍可用：`macos-14` 构建 universal dmg，`windows-2022` 构建 NSIS exe，推 `client-v*` 标签或手动触发。仓库目前只有 CNB 远端，没有 GitHub 镜像时这条流水线不会运行，仅作为以后有 GitHub 远端时的备选。
 
 ## 安装未签名构建
 
@@ -178,7 +161,7 @@ CNB 的 Linux 容器理论上可以构建 Linux 版 Tauri，但需要安装 `web
 
 签名需要 Apple Developer ID 证书、公证凭据和 Windows 代码签名证书。配置好之后在 workflow 里加 secrets，并把 `APPLE_SIGNING_IDENTITY` 等传给 Tauri 即可；这不是当前范围。
 
-未签名意味着无法验证二进制来源，只应从自己的构建流水线或可信的 Release 下载，不要转发给其他人。
+未签名意味着无法验证二进制来源，只应从本机构建或自己的 CNB Release 下载，不要转发给其他人。
 
 ## 安全边界
 

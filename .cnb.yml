@@ -1,6 +1,6 @@
 # CNB 云原生构建：push / PR 时跑 Python 测试与前端构建检查。
-# 原生 macOS / Windows 安装包在 GitHub Actions 上构建（.github/workflows/desktop.yml）：
-# CNB 官方托管节点只有 Linux，无法产出 .dmg / .exe。
+# 原生安装包不在这里构建：官方托管节点只有 Linux，macOS / Windows 包在本机构建后
+# 上传 CNB Release（scripts/publish-client.sh）。GitHub Actions 配置保留为备选。
 main:
   push:
     - name: test

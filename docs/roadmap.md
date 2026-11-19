@@ -18,7 +18,7 @@
 - [x] `scripts/check-agents.sh`：检查各 agent 是否已接入
 - [x] `scripts/autocommit.sh`：服务器每小时自动提交
 - [x] 服务器 Web（`docs/web.md`）：设备活动、归档状态、记忆/报告/提案查看；提案可逐条批准/驳回
-- [x] 桌面客户端 amem（`docs/client.md`）：macOS 已验证；Windows 构建配置就绪，待实机验证；GitHub Actions 构建
+- [x] 桌面客户端 amem（`docs/client.md`）：macOS 已验证；Windows 构建配置就绪，待实机验证；本机构建后上传 CNB Release
 - [x] `scripts/setup-server.sh`：服务器一键部署（固定版本、timer、cron）
 - [x] `docs/migration.md`：备份、迁移与灾备清单
 - [ ] 第二台设备接入
