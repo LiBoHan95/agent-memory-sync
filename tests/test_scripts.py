@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -146,6 +147,74 @@ class InstallCheckTest(unittest.TestCase):
                 self.assertTrue(plist.exists())
                 self.assertIn(str(SCRIPTS / "archive-transcripts.sh"),
                               plist.read_text(encoding="utf-8"))
+
+    def test_install_cleanup_days_env(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            (home / ".claude").mkdir(parents=True)
+            vault = make_vault(tmp)
+            env = {"HOME": str(home), "AMEM_VAULT": str(vault),
+                   "AMEM_PROJECT_ROOTS": "", "AMEM_SKIP_SCHEDULER": "1",
+                   "AMEM_CLEANUP_DAYS": "90"}
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "claude-code"], env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            settings = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+            self.assertEqual(settings["cleanupPeriodDays"], 90)
+            r = run([BASH, str(SCRIPTS / "check-agents.sh")], env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("cleanupPeriodDays=90", r.stdout)
+
+    def test_check_accepts_custom_cleanup_days(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            (home / ".claude").mkdir(parents=True)
+            vault = make_vault(tmp)
+            env = {"HOME": str(home), "AMEM_VAULT": str(vault),
+                   "AMEM_PROJECT_ROOTS": "", "AMEM_SKIP_SCHEDULER": "1",
+                   "AMEM_CLEANUP_DAYS": ""}
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "claude-code"], env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            settings_path = home / ".claude" / "settings.json"
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            settings["cleanupPeriodDays"] = 90
+            settings_path.write_text(json.dumps(settings), encoding="utf-8")
+
+            r = run([BASH, str(SCRIPTS / "check-agents.sh")], env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("cleanupPeriodDays=90", r.stdout)
+
+    def test_install_cleanup_days_normalizes_leading_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            (home / ".claude").mkdir(parents=True)
+            vault = make_vault(tmp)
+            env = {"HOME": str(home), "AMEM_VAULT": str(vault),
+                   "AMEM_PROJECT_ROOTS": "", "AMEM_SKIP_SCHEDULER": "1",
+                   "AMEM_CLEANUP_DAYS": "090"}
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "claude-code"], env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            settings = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+            self.assertEqual(settings["cleanupPeriodDays"], 90)
+            r = run([BASH, str(SCRIPTS / "check-agents.sh")], env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("cleanupPeriodDays=90", r.stdout)
+
+    def test_install_rejects_zero_cleanup_days(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            home.mkdir()
+            vault = make_vault(tmp)
+            env = {"HOME": str(home), "AMEM_VAULT": str(vault),
+                   "AMEM_PROJECT_ROOTS": "", "AMEM_SKIP_SCHEDULER": "1",
+                   "AMEM_CLEANUP_DAYS": "0"}
+            r = run([BASH, str(SCRIPTS / "install.sh"), "--agents", "claude-code",
+                     "--dry-run"], env=env)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("正整数", r.stderr)
 
     def test_install_auto_only_touches_installed_agents(self):
         with tempfile.TemporaryDirectory() as td:
@@ -615,6 +684,58 @@ class ArchiveScriptTest(unittest.TestCase):
             self.assertTrue(all("-p 2222" in line for line in ssh_calls), ssh_calls)
             rsync_calls = rsync_log.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(rsync_calls), 3, rsync_calls)
+
+    def test_hot_days_only_uploads_recent_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            src = home / ".claude" / "projects" / "p1"
+            src.mkdir(parents=True)
+            fresh = src / "fresh.jsonl"
+            old = src / "old.jsonl"
+            fresh.write_text("n\n", encoding="utf-8")
+            old.write_text("o\n", encoding="utf-8")
+            past = time.time() - 10 * 86400
+            os.utime(old, (past, past))
+
+            env = self._env(tmp, home, AMEM_ARCHIVE_HOT_DAYS="1")
+            r = run([BASH, str(SCRIPTS / "archive-transcripts.sh")], env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            base = tmp / "target" / "testmac" / "claude-code" / "p1"
+            self.assertTrue((base / "fresh.jsonl").exists())
+            self.assertFalse((base / "old.jsonl").exists())
+
+    def test_hot_days_accepts_leading_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            src = home / ".claude" / "projects" / "p1"
+            src.mkdir(parents=True)
+            old = src / "old.jsonl"
+            old.write_text("o\n", encoding="utf-8")
+            past = time.time() - 30 * 86400
+            os.utime(old, (past, past))
+
+            env = self._env(tmp, home, AMEM_ARCHIVE_HOT_DAYS="08")
+            r = run([BASH, str(SCRIPTS / "archive-transcripts.sh")], env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertFalse(
+                (tmp / "target" / "testmac" / "claude-code" / "p1" / "old.jsonl").exists())
+
+    def test_relative_target_outside_source(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            home = tmp / "home"
+            src = home / ".claude" / "projects" / "p1"
+            src.mkdir(parents=True)
+            (src / "s1.jsonl").write_text("x\n", encoding="utf-8")
+            env = self._env(tmp, home, AMEM_ARCHIVE_TARGET="relbackup",
+                            AMEM_ARCHIVE_HOT_DAYS="1")
+            r = run([BASH, str(SCRIPTS / "archive-transcripts.sh")], env=env, cwd=tmp)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertTrue(
+                (tmp / "relbackup" / "testmac" / "claude-code" / "p1" / "s1.jsonl").exists())
+            self.assertFalse((src / "relbackup").exists())
 
     def test_missing_target_fails(self):
         with tempfile.TemporaryDirectory() as td:

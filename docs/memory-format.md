@@ -39,6 +39,14 @@ superseded_by:          # 被替代时填新条目 name
 | `projects/` | 跨设备、跨 agent 的项目上下文（不是代码结构，代码里能查到的不写） | agent 可直接写 |
 | `log/` | 原始观察，只追加 | agent 随时写 |
 
+## 项目页的结束
+
+`projects/` 是派生上下文，不是原始证据。项目放弃或代码已删除时：
+
+- 只有用户明确要求，才删除 `projects/<name>.md`，并同步删除 `MEMORY.md` 里对应的索引行；删除前检查反链。
+- 不要为了删除而用 `superseded` 伪造一个继任条目。
+- `log/` 和原始转录不动；要清除原始转录，用 `python3 -m amem.forget --project <项目路径> --dry-run`（确认后加 `--yes`），见 `docs/retention.md`。
+
 ## log 格式
 
 文件名：`log/YYYY-MM.<设备名>.md`，按设备分文件避免同步冲突。

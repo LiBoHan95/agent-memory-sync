@@ -64,6 +64,7 @@ command -v gitleaks >/dev/null 2>&1 || fail "找不到 gitleaks（闸门会拒�
 if [[ -z "${AMEM_AGENT_CMD:-}" ]]; then
     command -v claude >/dev/null 2>&1 || fail "找不到 claude（或设置 AMEM_AGENT_CMD）"
 fi
+command -v zstd >/dev/null 2>&1 || fail "找不到 zstd（读取 DSH/压缩转录需要）"
 
 [[ -d "$VAULT" ]] || fail "vault 不存在: $VAULT"
 [[ -d "$ARCHIVE" ]] || fail "转录归档不存在: $ARCHIVE"

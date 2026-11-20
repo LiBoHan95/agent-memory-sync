@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .base import DREAM_WORKDIR_MARK, Message, read_complete_lines
+from .base import DREAM_WORKDIR_MARK, Message, is_transcript, read_lines
 
 AGENT = "claude-code"
 NOISE_PREFIXES = ("<command-name>", "<command-message>", "<command-args>",
@@ -84,10 +84,10 @@ class ClaudeCodeParser:
     agent = AGENT
 
     def matches(self, path: Path) -> bool:
-        return path.suffix == ".jsonl"
+        return is_transcript(path)
 
     def parse(self, path: Path, offset: int, *, device: str, rel: str) -> tuple[list[Message], int]:
-        lines, new_offset = read_complete_lines(path, offset)
+        lines, new_offset = read_lines(path, offset)
         out = []
         for line in lines:
             if not line.strip():

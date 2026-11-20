@@ -19,7 +19,7 @@ C 级不自动的原因：这两个目录会注入每个 agent 的每次会话�
 ## 输入
 
 - `log/*.md`：上次运行后新增的条目
-- `transcript-archive/`：上次运行后新增的转录，用来核实 log 和找出会话中没被记下的偏好（见 `transcript-archive.md`）
+- `transcript-archive/`：上次运行后新增的转录，用来核实 log 和找出会话中没被记下的偏好（见 `transcript-archive.md`）。支持明文 `.jsonl` 和压缩后的 `.jsonl.zst/.jsonl.zstd`；`conversation/` 目录是留存层，不参与 dreaming。
 - 当前的 `profile/` `rules/` `projects/` `MEMORY.md`
 
 ## 流程
@@ -46,11 +46,13 @@ C 级不自动的原因：这两个目录会注入每个 agent 的每次会话�
 30 4 * * * ~/agent-memory-sync/scripts/dream.sh
 ```
 
-`scripts/dream.sh` 先检查 `gitleaks`、`claude`、vault 和归档目录，再调用 `python3 -m amem.dream`；日志默认写 `~/dream.log`，失败时尝试 `notify-send` / `osascript` / `logger` 通知。
+`scripts/dream.sh` 先检查 `gitleaks`、`claude`、`zstd`、vault 和归档目录，再调用 `python3 -m amem.dream`；日志默认写 `~/dream.log`，失败时尝试 `notify-send` / `osascript` / `logger` 通知。
 
 - agent 的工作目录是 vault 的临时副本，增量材料在 `input.md`；agent 改不到真实 vault。
 - 不给 agent Bash 权限；git 提交、gitleaks 校验由 `amem.gate` 在 agent 结束后执行。
 - 可用 `AMEM_AGENT_CMD` 换成 `codex exec` 等，dreaming 不依赖特定 agent。
+- 归档压缩由 `amem.archive compact` 完成，并把 `.dream-state` 的明文偏移换算成压缩文件的行状态；只迁移已确认读到末尾的部分，未读尾部会继续处理。压缩文件被追加新帧时也只读新增行；末尾没写完的 JSON 行不计入已消费。明文重新上传时只有在文件前缀与压缩内容一致时才继承压缩层进度，文件被替换则从头处理。
+- `.dream-state` 里类型不合法的偏移/行数按缺失处理，不会中断整轮。单个转录读取失败（权限、损坏、缺 zstd）会记入报告的“读取失败（下次重试）”，保留该文件旧偏移，其余文件照常处理。整批都读不到时状态为 `failed`，退出码非 0；部分失败仍会完成本轮整理并推进成功文件的偏移。DSH 事件里的异常时间戳会原样转成字符串，不会让解析抛错。
 
 ## 成本
 
@@ -60,4 +62,4 @@ C 级不自动的原因：这两个目录会注入每个 agent 的每次会话�
 
 ## 待补
 
-- DeepSeek Harness 的转录是 zstd 压缩（`*.jsonl.zstd`），标准库不能直接读，解析器暂未实现。
+- 无。DeepSeek Harness 的 `*.jsonl.zstd` 解析器已实现（`amem/parsers/dsh.py`）。

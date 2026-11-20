@@ -1,10 +1,14 @@
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
+from amem.parsers.base import read_head_lines
 from amem.parsers.claude_code import ClaudeCodeParser
 from amem.parsers.codex import CodexParser
+from amem.parsers.dsh import DshParser
 from amem.parsers.pi import PiParser
 
 
@@ -171,6 +175,173 @@ class PiTest(unittest.TestCase):
         ]
         msgs, _ = PiParser().parse(self.write(entries), 0, device="mac", rel="r")
         self.assertEqual(msgs, [])
+
+
+@unittest.skipUnless(shutil.which("zstd"), "需要 zstd")
+class DshTest(unittest.TestCase):
+    NAME = "session.v4.jsonl.zstd"
+
+    def write(self, entries):
+        p = Path(tempfile.mkdtemp(), self.NAME)
+        data = b"".join(json.dumps(e).encode() + b"\n" for e in entries)
+        r = subprocess.run(["zstd", "-q", "-f", "-o", str(p), "-"], input=data,
+                           capture_output=True)
+        assert r.returncode == 0, r.stderr
+        return p
+
+    def test_filters_injections_and_tool_calls(self):
+        entries = [
+            {"type": "session", "id": "s1", "cwd": "/w", "createdAt": 1760000000000},
+            {"type": "user/message", "seq": 1, "time": 1760000001000,
+             "data": {"role": "user", "source": {"kind": "user"},
+                      "content": [{"type": "text", "text": "用中文"}]}},
+            {"type": "user/message", "seq": 2, "time": 1760000002000,
+             "data": {"role": "user", "source": {"kind": "runtime-context"},
+                      "content": [{"type": "text", "text": "Current runtime context"}]}},
+            {"type": "assistant/message", "seq": 3, "time": 1760000003000,
+             "data": {"message": {"role": "assistant", "content": [
+                 {"type": "reasoning", "text": "想了很久"},
+                 {"type": "text", "text": "好的"},
+                 {"type": "tool-call", "name": "bash"}]}}},
+            {"type": "system/message", "seq": 4, "time": 1760000004000,
+             "data": {"message": {"role": "system", "content": [
+                 {"type": "text", "text": "系统注入"}]}}},
+            {"type": "user/message", "seq": 5, "time": 1760000005000,
+             "data": {"role": "user", "source": {"kind": "user"},
+                      "content": [{"type": "text", "text": "<system-reminder>x"}]}},
+            {"type": "user/message", "seq": 6, "time": 1760000006000,
+             "data": {"role": "user",
+                      "content": [{"type": "text", "text": "缺 source 的注入"}]}},
+        ]
+        msgs, _ = DshParser().parse(self.write(entries), 0, device="mac", rel="r")
+        self.assertEqual([(m.role, m.text, m.session, m.cwd, m.origin) for m in msgs], [
+            ("user", "用中文", "s1", "/w", "human"),
+            ("assistant", "好的", "s1", "/w", "human")])
+        self.assertTrue(msgs[0].timestamp.startswith("2025-10-"))
+
+
+    def test_bad_timestamps_do_not_crash(self):
+        entries = [
+            {"type": "session", "id": "s1", "cwd": "/w", "createdAt": 0},
+            {"type": "user/message", "seq": 1, "time": float("nan"),
+             "data": {"role": "user", "source": {"kind": "user"},
+                      "content": [{"type": "text", "text": "一"}]}},
+            {"type": "user/message", "seq": 2, "time": 10**30,
+             "data": {"role": "user", "source": {"kind": "user"},
+                      "content": [{"type": "text", "text": "二"}]}},
+        ]
+        msgs, _ = DshParser().parse(self.write(entries), 0, device="mac", rel="r")
+        self.assertEqual([m.text for m in msgs], ["一", "二"])
+
+
+@unittest.skipUnless(shutil.which("zstd"), "需要 zstd")
+class CompressedTest(unittest.TestCase):
+    def test_claude_jsonl_zst_and_offset(self):
+        entries = [
+            {"type": "user", "message": {"role": "user", "content": "用中文"},
+             "timestamp": "2026-11-13T06:00:00Z", "sessionId": "s1", "cwd": "/w"},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "好的"}]},
+             "timestamp": "2026-11-13T06:00:01Z", "sessionId": "s1", "cwd": "/w"},
+        ]
+        p = Path(tempfile.mkdtemp(), "s.jsonl.zst")
+        data = b"".join(json.dumps(e).encode() + b"\n" for e in entries)
+        r = subprocess.run(["zstd", "-q", "-f", "-o", str(p), "-"], input=data,
+                           capture_output=True)
+        assert r.returncode == 0, r.stderr
+        parser = ClaudeCodeParser()
+        self.assertTrue(parser.matches(p))
+        msgs, off = parser.parse(p, 0, device="mac", rel="r")
+        self.assertEqual([m.text for m in msgs], ["用中文", "好的"])
+        self.assertEqual(off, 2)  # 压缩文件用已消费行数，而不是压缩字节数
+        self.assertEqual(parser.parse(p, off, device="mac", rel="r")[0], [])
+
+    def test_append_only_zstd_reads_only_new_lines(self):
+        first = [
+            {"type": "user", "message": {"role": "user", "content": "Q1"},
+             "timestamp": "t1", "sessionId": "s1", "cwd": "/w"},
+            {"type": "assistant", "message": {"role": "assistant", "content": "A1"},
+             "timestamp": "t2", "sessionId": "s1", "cwd": "/w"},
+        ]
+        second = [{"type": "user", "message": {"role": "user", "content": "Q2"},
+                   "timestamp": "t3", "sessionId": "s1", "cwd": "/w"}]
+        p = Path(tempfile.mkdtemp(), "s.jsonl.zst")
+        parser = ClaudeCodeParser()
+        for entries, append in ((first, False), (second, True)):
+            data = b"".join(json.dumps(e).encode() + b"\n" for e in entries)
+            frame = subprocess.run(["zstd", "-q", "-c", "-"], input=data,
+                                   capture_output=True, check=True).stdout
+            with open(p, "ab" if append else "wb") as f:
+                f.write(frame)
+            if not append:
+                msgs, off = parser.parse(p, 0, device="mac", rel="r")
+                self.assertEqual([m.text for m in msgs], ["Q1", "A1"])
+                self.assertEqual(off, 2)
+            else:
+                msgs, off = parser.parse(p, off, device="mac", rel="r")
+                self.assertEqual([m.text for m in msgs], ["Q2"])
+                self.assertEqual(off, 3)
+
+    def test_incomplete_tail_is_not_counted_as_consumed(self):
+        first = {"type": "user", "message": {"role": "user", "content": "Q1"},
+                 "timestamp": "t1", "sessionId": "s1", "cwd": "/w"}
+        second = {"type": "user", "message": {"role": "user", "content": "Q2"},
+                  "timestamp": "t2", "sessionId": "s1", "cwd": "/w"}
+        second_bytes = json.dumps(second).encode()
+        cut = len(second_bytes) // 2
+        p = Path(tempfile.mkdtemp(), "s.jsonl.zst")
+        parser = ClaudeCodeParser()
+
+        def append_frame(data: bytes, mode: str) -> None:
+            frame = subprocess.run(["zstd", "-q", "-c", "-"], input=data,
+                                   capture_output=True, check=True).stdout
+            with open(p, mode) as f:
+                f.write(frame)
+
+        append_frame(json.dumps(first).encode() + b"\n" + second_bytes[:cut], "wb")
+        msgs, off = parser.parse(p, 0, device="mac", rel="r")
+        self.assertEqual([m.text for m in msgs], ["Q1"])
+        self.assertEqual(off, 1)  # 半行不算已消费
+
+        append_frame(second_bytes[cut:] + b"\n", "ab")
+        msgs, off = parser.parse(p, off, device="mac", rel="r")
+        self.assertEqual([m.text for m in msgs], ["Q2"])
+        self.assertEqual(off, 2)
+
+    def test_read_head_lines_tolerates_truncated_tail(self):
+        line = json.dumps({"type": "session", "cwd": "/w"}).encode() + b"\n"
+        frame = subprocess.run(["zstd", "-q", "-c", "-"], input=line,
+                               capture_output=True, check=True).stdout
+        p = Path(tempfile.mkdtemp(), "partial.jsonl.zst")
+        # 合法前缀 + 下一帧的前半段，模拟 DSH 正在写入
+        p.write_bytes(frame + frame[:len(frame) // 2])
+        head = read_head_lines(p, 20)
+        self.assertIn(line, head)
+
+    def test_read_head_lines_reports_corrupt_zstd(self):
+        p = Path(tempfile.mkdtemp(), "bad.jsonl.zst")
+        p.write_bytes(b"not zstd")
+        with self.assertRaises(RuntimeError):
+            read_head_lines(p, 5)
+
+    def test_filename_fallback_strips_compressed_suffix(self):
+        uuid = "12345678-1234-1234-1234-123456789abc"
+        cases = [
+            (f"rollout-2026-11-13T06-00-00-{uuid}.jsonl.zst", CodexParser(), [
+                {"type": "response_item", "payload": {
+                    "type": "message", "role": "user",
+                    "content": [{"type": "input_text", "text": "hi"}]}}]),
+            (f"2026-11-13T06-00-00_{uuid}.jsonl.zst", PiParser(), [
+                {"type": "message", "message": {
+                    "role": "user", "content": [{"type": "text", "text": "hi"}]}}]),
+        ]
+        for name, parser, entries in cases:
+            p = Path(tempfile.mkdtemp(), name)
+            data = b"".join(json.dumps(e).encode() + b"\n" for e in entries)
+            subprocess.run(["zstd", "-q", "-f", "-o", str(p), "-"], input=data,
+                           capture_output=True, check=True)
+            msgs, _ = parser.parse(p, 0, device="mac", rel="r")
+            self.assertEqual(msgs[0].session, uuid, name)
 
 
 if __name__ == "__main__":

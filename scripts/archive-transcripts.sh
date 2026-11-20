@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # 把各 agent 的原始会话转录单向归档到服务器或移动硬盘。
 #
-# 原则：原样保存、只增不删。rsync 不带 --delete，本地被 agent 清理掉的文件
-# 在归档里继续保留；也不带 --ignore-existing，因为转录会持续追加。
+# 原则：原样保存、客户端只增。rsync 不带 --delete，本地被 agent 清理掉的文件
+# 在归档里继续保留；也不带 --ignore-existing，因为转录会持续追加。服务器
+# 侧再按保留策略压缩/清除冷数据。
 #
 # 用法: scripts/archive-transcripts.sh [--dry-run]
 #
@@ -19,8 +20,13 @@
 #   AMEM_DEVICE           设备名，默认 hostname -s
 #   AMEM_ARCHIVE_LOG      日志，默认 ~/amem-archive.log
 #   AMEM_ARCHIVE_LOCK     锁目录，默认 $TMPDIR/amem-archive.lock
-#   AMEM_ARCHIVE_RSYNC_OPTS  额外 rsync 参数，如 '-e "ssh -p 2222"'
-#   AMEM_ARCHIVE_SSH_OPTS    建远端目录时传给 ssh 的额外参数，如 '-p 2222'
+#   AMEM_ARCHIVE_RSYNC_OPTS  额外 rsync 参数，如 '--bwlimit=2000'（只支持简单
+#                            单词参数，不要在值里再嵌引号）
+#   AMEM_ARCHIVE_SSH_OPTS    传给 ssh 的额外参数，如 '-p 2222'；同时用于建远端
+#                            目录和 rsync 的远端 shell
+#   AMEM_ARCHIVE_HOT_DAYS    只上传最近 N 天修改过的文件；0 或不设表示全部。
+#                            配合服务器上的 `python3 -m amem.archive compact`
+#                            使用，避免已压缩的旧明文被下一轮重复上传。
 set -euo pipefail
 
 usage() {
@@ -57,6 +63,14 @@ fi
 LOG="${AMEM_ARCHIVE_LOG:-$HOME/amem-archive.log}"
 LOCK="${AMEM_ARCHIVE_LOCK:-${TMPDIR:-/tmp}/amem-archive.lock}"
 DEVICE="${AMEM_DEVICE:-$(hostname -s)}"
+HOT_DAYS="${AMEM_ARCHIVE_HOT_DAYS:-0}"
+
+if [[ ! "$HOT_DAYS" =~ ^[0-9]+$ ]]; then
+    echo "AMEM_ARCHIVE_HOT_DAYS 必须是整数: ${HOT_DAYS}" >&2
+    exit 2
+fi
+# 去掉前导零，避免 (( 08 )) 被当成八进制而报错后静默退回全量上传。
+HOT_DAYS=$((10#$HOT_DAYS))
 
 if [[ ! "$DEVICE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
     echo "设备名不合法: ${DEVICE}（可用 AMEM_DEVICE 覆盖）" >&2
@@ -76,6 +90,11 @@ TARGET="${TARGET%/}"
 if [[ -z "$TARGET" ]]; then
     echo "归档目标不合法: 不能是根路径" >&2
     exit 2
+fi
+# 本地相对目标在 HOT_DAYS 分支会在源目录的子 shell 里解析，先转成基于
+# 调用目录的绝对路径，避免把备份写进源转录目录。
+if [[ "$TARGET" != *:* && "$TARGET" != /* ]]; then
+    TARGET="$(pwd)/$TARGET"
 fi
 REMOTE=0
 [[ "$TARGET" == *:* ]] && REMOTE=1
@@ -151,15 +170,31 @@ sources() {
 
 ARGS=(-a)
 (( DRY_RUN )) && ARGS+=(-n)
-# 无人值守时不要卡在 SSH 密码/主机指纹提示上；需要自定义时用 AMEM_ARCHIVE_RSYNC_OPTS
-if (( REMOTE )) && [[ -z "${AMEM_ARCHIVE_RSYNC_OPTS:-}" ]]; then
-    ARGS+=(-e "ssh -o BatchMode=yes -o ConnectTimeout=30")
+# 无人值守时不要卡在 SSH 密码/主机指纹提示上；SSH 参数同时用于 rsync 的远端 shell。
+if (( REMOTE )); then
+    SSH_CMD="ssh -o BatchMode=yes -o ConnectTimeout=30"
+    if [[ -n "${AMEM_ARCHIVE_SSH_OPTS:-}" ]]; then
+        SSH_CMD+=" ${AMEM_ARCHIVE_SSH_OPTS}"
+    fi
+    ARGS+=(-e "$SSH_CMD")
 fi
 if [[ -n "${AMEM_ARCHIVE_RSYNC_OPTS:-}" ]]; then
-    # 有意做单词拆分，允许传 '-e "ssh -p 2222"' 这类参数
+    # 有意做单词拆分；值里不要再嵌引号，复杂场景用包装脚本。
     # shellcheck disable=SC2206
     ARGS+=(${AMEM_ARCHIVE_RSYNC_OPTS})
 fi
+
+# HOT_DAYS > 0 时只把最近修改过的文件交给 rsync；旧文件由服务器归档层
+# 压缩/删除，客户端不再重复上传明文。
+sync_source() {
+    local src="$1" dst="$2"
+    if (( HOT_DAYS > 0 )); then
+        ( cd "$src" && find . -type f -mtime "-${HOT_DAYS}" -print0 \
+            | rsync "${ARGS[@]}" --files-from=- --from0 ./ "$dst/" )
+    else
+        rsync "${ARGS[@]}" "$src/" "$dst/"
+    fi
+}
 
 failed=0
 while IFS='|' read -r label src dest; do
@@ -178,7 +213,7 @@ while IFS='|' read -r label src dest; do
     if (( ! REMOTE )) && (( ! DRY_RUN )); then
         mkdir -p "$dst"
     fi
-    if rsync "${ARGS[@]}" "$src/" "$dst/" >>"$LOG" 2>&1; then
+    if sync_source "$src" "$dst" >>"$LOG" 2>&1; then
         log "ok   $label -> $dst"
     else
         code=$?

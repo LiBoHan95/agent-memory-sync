@@ -33,6 +33,7 @@ from . import format as fmt
 from . import proposals as propmod
 from . import syncthing
 from .render import render_markdown
+from .archive import SKIP_TOP as ARCHIVE_SKIP_TOP
 
 MAX_FILE_BYTES = 512 * 1024
 MAX_DIFF_BYTES = 256 * 1024
@@ -336,6 +337,8 @@ def _scan_archive(archive: Path) -> dict[str, list[ArchiveStat]]:
         return out
     for device in devices:
         if device.is_symlink() or not device.is_dir() or not _DEVICE_RE.match(device.name):
+            continue
+        if device.name in ARCHIVE_SKIP_TOP:
             continue
         stats: list[ArchiveStat] = []
         try:

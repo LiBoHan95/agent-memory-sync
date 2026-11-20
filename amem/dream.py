@@ -19,7 +19,16 @@ from pathlib import Path
 
 from . import format as fmt
 from . import gate, parsers
-from .parsers.base import DREAM_WORKDIR_MARK, Message
+from .parsers.base import (
+    DREAM_WORKDIR_MARK,
+    Message,
+    byte_offset_for_lines,
+    compressed_line_state,
+    is_compressed,
+    plain_rel_sibling,
+    plain_sibling,
+    prefix_matches_lines,
+)
 from .screen import PassThrough, Screener
 
 STATE_FILE = ".dream-state"
@@ -53,8 +62,9 @@ class Config:
 
 @dataclass
 class State:
-    transcripts: dict[str, int] = field(default_factory=dict)  # 归档相对路径 -> 字节偏移
+    transcripts: dict[str, int] = field(default_factory=dict)  # 归档相对路径 -> 已处理偏移
     logs: dict[str, int] = field(default_factory=dict)         # log 相对路径 -> 已处理字节数
+    compressed_lines: dict[str, int] = field(default_factory=dict)  # 压缩转录 -> 已处理行数
     last_run: str = ""
 
     @classmethod
@@ -63,18 +73,34 @@ class State:
         if not p.exists():
             return cls()
         d = json.loads(p.read_text(encoding="utf-8"))
-        return cls(dict(d.get("transcripts", {})), dict(d.get("logs", {})), d.get("last_run", ""))
+        return cls(_int_map(d.get("transcripts")), _int_map(d.get("logs")),
+                   _int_map(d.get("compressed_lines")), d.get("last_run", ""))
 
     def save(self, vault: Path) -> None:
         p = vault / STATE_FILE
         tmp = p.with_name(STATE_FILE + ".tmp")
         tmp.write_text(json.dumps({"version": 1, "last_run": self.last_run,
-                                   "transcripts": self.transcripts, "logs": self.logs},
+                                   "transcripts": self.transcripts, "logs": self.logs,
+                                   "compressed_lines": self.compressed_lines},
                                   ensure_ascii=False, indent=1, sort_keys=True), encoding="utf-8")
         tmp.replace(p)
 
 
 # ---------- 收集增量 ----------
+
+def _int_map(value) -> dict[str, int]:
+    """state 里的偏移/行数只能是字符串键 + 非负整数；坏值按缺失处理。"""
+    if not isinstance(value, dict):
+        return {}
+    return {k: v for k, v in value.items()
+            if isinstance(k, str) and isinstance(v, int)
+            and not isinstance(v, bool) and v >= 0}
+
+
+def _known_lines(state: State, rel: str) -> int:
+    value = state.compressed_lines.get(rel, 0)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
 
 @dataclass
 class Batch:
@@ -83,6 +109,7 @@ class Batch:
     next_state: State = field(default_factory=State)
     skipped: list[str] = field(default_factory=list)                 # 超预算留到下次的文件
     unknown: list[str] = field(default_factory=list)                 # 没有解析器的目录
+    errors: list[str] = field(default_factory=list)                  # 读取失败的文件（下次重试）
 
     @property
     def empty(self) -> bool:
@@ -91,7 +118,8 @@ class Batch:
 
 def collect(cfg: Config, state: State, screener: Screener) -> Batch:
     """按预算收集增量。第一个文件即使超预算也收（会截断），避免卡死在一个大文件上。"""
-    b = Batch(next_state=State(dict(state.transcripts), dict(state.logs)))
+    b = Batch(next_state=State(dict(state.transcripts), dict(state.logs),
+                               dict(state.compressed_lines)))
     used = 0
 
     def fits(n: int) -> bool:
@@ -116,6 +144,8 @@ def collect(cfg: Config, state: State, screener: Screener) -> Batch:
 
     if cfg.archive and cfg.archive.is_dir():
         for dev_dir in sorted(p for p in cfg.archive.iterdir() if p.is_dir()):
+            if dev_dir.name in ("conversation", ".amem-forget"):
+                continue
             for agent_dir in sorted(p for p in dev_dir.iterdir() if p.is_dir()):
                 parser = parsers.get(agent_dir.name)
                 if parser is None:
@@ -125,17 +155,85 @@ def collect(cfg: Config, state: State, screener: Screener) -> Batch:
                     if path.is_symlink() or not path.is_file() or not parser.matches(path):
                         continue
                     rel = path.relative_to(cfg.archive).as_posix()
-                    off = state.transcripts.get(rel, 0)
-                    if path.stat().st_size == off:
+                    compressed = is_compressed(path)
+                    if compressed:
+                        sibling = plain_sibling(path)
+                        if sibling is not None and sibling.exists():
+                            # 明文还在时以明文为准；压缩副本等明文删除后再读。
+                            continue
+                    try:
+                        size = path.stat().st_size
+                    except OSError as e:
+                        b.errors.append(f"{rel}: {e}")
                         continue
-                    msgs, new_off = parser.parse(path, off, device=dev_dir.name, rel=rel)
+                    if compressed:
+                        known = state.transcripts.get(rel)
+                        if known is not None and size == known:
+                            continue
+                        if known is not None:
+                            off = _known_lines(state, rel)
+                        else:
+                            # compat：旧状态里只有明文的字节偏移；压缩后换算成行。
+                            plain_rel = plain_rel_sibling(rel)
+                            old = state.transcripts.get(plain_rel) if plain_rel else None
+                            if old is None:
+                                off = 0
+                            else:
+                                try:
+                                    consumed, total, raw_size = compressed_line_state(path, old)
+                                except (OSError, RuntimeError) as e:
+                                    b.errors.append(f"{rel}: {e}")
+                                    continue
+                                if old >= raw_size:
+                                    b.next_state.transcripts[rel] = size
+                                    b.next_state.compressed_lines[rel] = total
+                                    continue
+                                off = consumed
+                    else:
+                        off = state.transcripts.get(rel, 0)
+                        if size == off:
+                            continue
+                        # 压缩层读过的行数可能领先明文偏移（compact 迁移后
+                        # dreaming 先读完了 zst，客户端随后又上传同一份明文）。
+                        # 只有明文前缀与压缩内容一致时才换算偏移；明文被替换
+                        # 成不同内容时必须从头处理，不能跳过未读消息。
+                        derive_failed = False
+                        for suffix in (".zst", ".zstd"):
+                            other = rel + suffix
+                            done = _known_lines(state, other)
+                            other_path = path.with_name(path.name + suffix)
+                            if not done or not other_path.is_file():
+                                continue
+                            try:
+                                if prefix_matches_lines(path, other_path, done):
+                                    off = max(off, byte_offset_for_lines(path, done))
+                                else:
+                                    off = 0
+                            except (OSError, RuntimeError) as e:
+                                b.errors.append(f"{rel}: {e}")
+                                derive_failed = True
+                            break
+                        if derive_failed:
+                            continue
+                        if size == off:
+                            b.next_state.transcripts[rel] = size
+                            continue
+                    try:
+                        msgs, new_off = parser.parse(path, off, device=dev_dir.name, rel=rel)
+                    except (OSError, RuntimeError) as e:
+                        b.errors.append(f"{rel}: {e}")
+                        continue
                     msgs = screener.screen(msgs)
                     n = sum(len(m.text) for m in msgs)
                     if msgs and not fits(n):
                         b.skipped.append(rel)
                         continue
                     b.messages.extend(msgs)
-                    b.next_state.transcripts[rel] = new_off
+                    if compressed:
+                        b.next_state.transcripts[rel] = size
+                        b.next_state.compressed_lines[rel] = new_off
+                    else:
+                        b.next_state.transcripts[rel] = new_off
                     used += n
     return b
 
@@ -208,6 +306,9 @@ def render_report(now: datetime, b: Batch, dec: gate.Decision | None, res: gate.
          f"- 增量：log {len(b.logs)} 段，转录消息 {len(b.messages)} 条（筛选：{screener}）"]
     if b.skipped:
         L.append(f"- 超预算留到下次：{len(b.skipped)} 个文件")
+    if b.errors:
+        L.append(f"- 读取失败（下次重试）：{len(b.errors)} 个文件")
+        L += [f"  - `{e}`" for e in b.errors]
     if b.unknown:
         L.append(f"- 没有解析器的目录：{', '.join(b.unknown)}")
     if error:
@@ -271,6 +372,12 @@ def run(cfg: Config, *, screener: Screener | None = None, scanner: gate.Scanner 
         state = State.load(vault)
         batch = collect(cfg, state, screener)
         if batch.empty:
+            if batch.errors:
+                report_dir.mkdir(parents=True, exist_ok=True)
+                report = report_dir / f"{now:%Y-%m-%d-%H%M%S}.md"
+                report.write_text(render_report(now, batch, None, None, screener.name, ""),
+                                  encoding="utf-8")
+                return RunResult("failed", report)
             if not cfg.dry_run:
                 batch.next_state.last_run = now.isoformat(timespec="seconds")
                 batch.next_state.save(vault)

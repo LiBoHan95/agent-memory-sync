@@ -1,6 +1,6 @@
 # 边缘代码接口
 
-核心代码在 `amem/`（格式库、闸门、dreaming 主流程、Claude Code 解析器），只依赖 Python ≥3.10 标准库。
+核心代码在 `amem/`（格式库、闸门、dreaming 主流程、Claude Code 解析器），Python 侧只依赖 ≥3.10 标准库；读取 `.jsonl.zst` / `.jsonl.zstd` 和 DSH 转录需要外部 `zstd` 命令（v1.5+）。
 以下边缘代码交给其他模型实现，必须遵守这里的约定。不要修改 `amem/format.py` 和 `amem/gate.py`；需要改的话先提出来。
 
 验收：`python3 -m unittest discover -s tests -t .` 全部通过，新代码附带测试。
@@ -10,7 +10,7 @@
 参考 `amem/parsers/claude_code.py`，实现 `amem/parsers/base.py` 里的 `Parser` 协议：
 
 - `agent` 属性与归档目录名一致：`codex`、`pi`、`gemini`……
-- `parse(path, offset, device=, rel=)`：从字节偏移继续，只消费完整记录，返回 `(list[Message], 新偏移)`；文件变短时从 0 开始。
+- `parse(path, offset, device=, rel=)`：从偏移继续，只消费完整记录，返回 `(list[Message], 新偏移)`；文件变短时从 0 开始。明文 `offset` 是字节偏移；压缩转录的 `offset` 是**已消费的完整行数**（`amem.parsers.base.read_lines` 统一处理）。
 - 只输出用户亲手输入的消息（`role="user", origin="human"`）和 agent 的文字回复（`role="assistant"`）。
   脚本/SDK 发来的提示词标 `origin="automated"`。工具调用、工具结果、系统注入、思考过程一律丢弃。
 - `cwd` 含 `DREAM_WORKDIR_MARK` 的会话必须跳过（那是 dreaming 自己的会话）。
@@ -27,10 +27,11 @@
 ## 3. `scripts/archive-transcripts.sh` + launchd/cron
 
 - rsync 单向推到 `server:~/transcript-archive/<hostname -s>/<agent>/`，用 `rsync -a`，**不加 `--delete`**，也不加 `--ignore-existing`（转录会持续追加，变长的文件要重新同步）。
-- 源：`~/.claude/projects/` → `claude-code/`，`~/.claude/transcripts/` → `claude-code/transcripts/`，`~/.codex/sessions/` → `codex/`，`~/.codex/archived_sessions/` → `codex/archived_sessions/`，`~/.pi/agent/sessions/` → `pi/`。
+- 源：`~/.claude/projects/` → `claude-code/`，`~/.claude/transcripts/` → `claude-code/transcripts/`，`~/.codex/sessions/` → `codex/`，`~/.codex/archived_sessions/` → `codex/archived_sessions/`，`~/.dsh/sessions/` → `dsh/`，`~/.pi/agent/sessions/` → `pi/`。
+- `AMEM_ARCHIVE_HOT_DAYS=N` 时只上传最近 N 天修改过的文件；旧文件由服务器的 `amem.archive compact` 压缩/清除，避免明文被反复上传。默认 0 = 全部上传。
 - 目标从 `~/.config/amem/archive.env` 或环境变量读取（`AMEM_ARCHIVE_HOST` / `AMEM_ARCHIVE_TARGET`）。
 - 每小时一次：macOS 由 `install.sh` 渲染并加载 `scripts/launchd/io.github.amem.archive.plist`，Linux 写入 cron。失败只记日志，不弹窗。
-- 详见 `docs/transcript-archive.md`。
+- 详见 `docs/transcript-archive.md` 和 `docs/retention.md`。
 
 ## 4. `scripts/dream.sh`（服务器 cron 入口）
 
@@ -57,10 +58,10 @@ cd ~/agent-memory-sync && python3 -m amem.dream --vault ~/memory-vault --archive
 - 默认只接入本机已安装的 agent；`--agents auto` 只写已安装的，`--agents all` 或显式列表会为未安装的 agent 创建配置目录并写入。
 - 各 agent 的指令文件里加入带 `<!-- amem:begin -->` / `<!-- amem:end -->` 标记的协议引用，具体写法见 `docs/agent-integration.md`；已存在且指向当前 vault 就跳过，换路径时移除旧块和旧格式引用后重写。标记不配对时拒绝改动并提示手工修复。
 - 客户端 Agent 页复用同一套标记和路径约定；关闭接入时只移除 amem 生成的块或旧格式引用。
-- `~/.claude/settings.json` 设 `cleanupPeriodDays: 36500`，并把 vault 加入 `permissions.additionalDirectories`（用 JSON 解析修改，不要 sed）；开启时清掉其他 amem vault 的旧权限目录。
+- `~/.claude/settings.json` 设 `cleanupPeriodDays`（默认 36500，可用 `AMEM_CLEANUP_DAYS` 指定），并把 vault 加入 `permissions.additionalDirectories`（用 JSON 解析修改，不要 sed）；开启时清掉其他 amem vault 的旧权限目录。
 - 归档脚本就绪后安装归档定时任务（macOS launchd / Linux cron）；归档目标由 `~/.config/amem/archive.env` 提供。
 - 不读取、不复制任何 agent 配置里的密钥。
 
 ## 7. `scripts/check-agents.sh`
 
-只读。逐个 agent 检查：是否已引用协议、vault 是否可写、Claude Code 的 `cleanupPeriodDays`、归档任务最近一次成功时间。输出一张表。
+只读。逐个 agent 检查：是否已引用协议、vault 是否可写、Claude Code 的 `cleanupPeriodDays`、归档任务最近一次成功时间。输出一张表。未显式设置 `AMEM_CLEANUP_DAYS` 时，自定义的正整数清理天数视为有效；设置后要求精确匹配。

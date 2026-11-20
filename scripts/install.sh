@@ -7,9 +7,17 @@ set -euo pipefail
 
 VAULT="${AMEM_VAULT:-$HOME/memory-vault}"
 AGENTS="${AMEM_AGENTS:-auto}"
+CLEANUP_DAYS="${AMEM_CLEANUP_DAYS:-36500}"
 DRY_RUN=0
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
+
+if [[ ! "$CLEANUP_DAYS" =~ ^0*[1-9][0-9]*$ ]]; then
+    echo "AMEM_CLEANUP_DAYS 必须是正整数: ${CLEANUP_DAYS}" >&2
+    exit 2
+fi
+# 去掉前导零，避免 "090" 与 settings 里的 90 被当成不同值。
+CLEANUP_DAYS=$((10#$CLEANUP_DAYS))
 
 usage() {
     cat <<'EOF'
@@ -22,7 +30,8 @@ usage() {
                     auto（默认）只接入本机已安装的；all 接入全部
   -h, --help        显示本帮助
 
-环境变量: AMEM_VAULT, AMEM_AGENTS, AMEM_PROJECT_ROOTS, DSH_HOME
+环境变量: AMEM_VAULT, AMEM_AGENTS, AMEM_PROJECT_ROOTS, DSH_HOME,
+          AMEM_CLEANUP_DAYS（本机转录保留天数，默认 36500）
 EOF
 }
 
@@ -302,14 +311,14 @@ if want claude-code; then
 
     SETTINGS="$HOME/.claude/settings.json"
     if (( DRY_RUN )); then
-        plan "在 $SETTINGS 设置 cleanupPeriodDays=36500，并把 $VAULT 加入 permissions.additionalDirectories"
+        plan "在 $SETTINGS 设置 cleanupPeriodDays=$CLEANUP_DAYS，并把 $VAULT 加入 permissions.additionalDirectories"
     else
         mkdir -p "$HOME/.claude"
         [[ -f "$SETTINGS" ]] && backup "$SETTINGS"
-        result="$(python3 - "$SETTINGS" "$VAULT" <<'PY'
+        result="$(python3 - "$SETTINGS" "$VAULT" "$CLEANUP_DAYS" <<'PY'
 import json, os, sys
 
-path, vault = sys.argv[1], sys.argv[2]
+path, vault, cleanup_days = sys.argv[1], sys.argv[2], int(sys.argv[3])
 data = {}
 if os.path.exists(path) and os.path.getsize(path) > 0:
     with open(path, encoding="utf-8") as f:
@@ -318,8 +327,8 @@ if not isinstance(data, dict):
     raise SystemExit(f"settings.json 顶层不是对象: {path}")
 
 changed = False
-if data.get("cleanupPeriodDays") != 36500:
-    data["cleanupPeriodDays"] = 36500
+if data.get("cleanupPeriodDays") != cleanup_days:
+    data["cleanupPeriodDays"] = cleanup_days
     changed = True
 
 perms = data.get("permissions")
@@ -398,7 +407,7 @@ for root in ${AMEM_PROJECT_ROOTS:-$HOME/dev $HOME/workspace $HOME/projects}; do
     while IFS= read -r f; do
         val="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("cleanupPeriodDays","unset"))' \
             "$f" 2>/dev/null || echo "读取失败")"
-        if [[ "$val" != "unset" && "$val" != "36500" ]]; then
+        if [[ "$val" != "unset" && "$val" != "$CLEANUP_DAYS" ]]; then
             say "警告: $f 的 cleanupPeriodDays=${val}，会覆盖全局设置（issue #90148）"
         fi
     done < <(find "$root" -maxdepth 4 -type f -path '*/.claude/settings.json' 2>/dev/null || true)

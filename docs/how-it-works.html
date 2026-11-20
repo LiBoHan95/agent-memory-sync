@@ -270,7 +270,7 @@
           <code>~/.dsh/sessions</code>、<code>~/.pi/agent/sessions</code> 等。
         </div>
       </div>
-      <div class="arrow"><div><span>→</span><small>每小时<br>rsync 只增不删</small></div></div>
+      <div class="arrow"><div><span>→</span><small>每小时<br>rsync 单向归档</small></div></div>
       <div class="node">
         <div class="t">服务器归档区</div>
         <div class="d">
@@ -305,7 +305,7 @@
     <div class="lane-label">每小时</div>
     <div class="lane-body">
       <strong>本机 launchd</strong> 运行 <code>archive-transcripts.sh</code>，把各 agent 的转录同步到服务器，
-      只增不删。<strong>服务器 cron</strong> 运行 <code>autocommit.sh</code>，
+      客户端只增不删；<strong>服务器</strong>再按热窗口压缩冷数据。<strong>服务器 cron</strong> 运行 <code>autocommit.sh</code>，
       把 vault 的改动提交成一条 <code>auto: 时间戳</code> 的 git commit。
     </div>
   </div>

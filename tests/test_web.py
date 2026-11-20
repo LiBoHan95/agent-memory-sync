@@ -84,6 +84,8 @@ print('<x>')
     write(archive / "device-a" / "claude-code" / "one.jsonl", "{}")
     write(archive / "device-a" / "codex" / "two.jsonl", "{}\n")
     write(archive / "device-b" / "pi" / "three.jsonl", "{}\n")
+    # 对话层不是设备，归档统计必须忽略它。
+    write(archive / "conversation" / "device-a" / "claude-code" / "one.md.zst", "{}")
 
     reports = tmp / "dream-reports"
     write(reports / "2026-11-12-043000.md", "# 报告一\n")

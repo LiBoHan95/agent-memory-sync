@@ -122,7 +122,7 @@ fi
 # ---------- 基础包 ----------
 step "基础包"
 need=()
-for pkg in git rsync curl xz-utils ca-certificates python3 syncthing; do
+for pkg in git rsync curl xz-utils ca-certificates python3 syncthing zstd; do
     if ! dpkg -s "$pkg" >/dev/null 2>&1; then
         need+=("$pkg")
     fi

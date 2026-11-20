@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 记忆内容 | `~/memory-vault` | Syncthing 有多副本，但仍是唯一事实来源 | Syncthing 自动同步 |
 | vault git 历史 | `~/memory-vault/.git` | 不能 | 随备份搬运 |
-| 原始转录归档 | `~/transcript-archive/` | **不能**，只增不删 | rsync 单独搬运，耗时长 |
+| 原始转录归档 | `~/transcript-archive/` | **不能**，客户端只增、服务器可压缩/清除 | rsync 单独搬运，耗时长 |
 | Syncthing 设备身份 | `~/.local/state/syncthing/`（旧版在 `~/.config/syncthing/`） | **不能**，丢失后设备 ID 改变 | 停服务后整目录搬 |
 | Pi 凭据 | `~/.pi/agent/auth.json` | 能重新登录，但麻烦 | 加密备份 |
 | dreaming 单元与配置 | `~/.config/systemd/user/`、`~/.config/amem/`、crontab | 能，脚本可重建 | 备份或重新生成 |

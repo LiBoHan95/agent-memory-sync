@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .base import DREAM_WORKDIR_MARK, Message, read_complete_lines
+from .base import DREAM_WORKDIR_MARK, Message, is_transcript, read_lines, transcript_stem
 
 AGENT = "pi"
 MAX_ASSISTANT_CHARS = 2000
@@ -35,7 +35,7 @@ def _text_of(content) -> str | None:
 
 def _session_from_name(path: Path) -> str:
     """<时间戳>_<uuid>.jsonl → uuid。增量读取时 session 行已过，用文件名兜底。"""
-    stem = path.stem
+    stem = transcript_stem(path)
     return stem.rsplit("_", 1)[-1] if "_" in stem else stem
 
 
@@ -43,10 +43,10 @@ class PiParser:
     agent = AGENT
 
     def matches(self, path: Path) -> bool:
-        return path.suffix == ".jsonl"
+        return is_transcript(path)
 
     def parse(self, path: Path, offset: int, *, device: str, rel: str) -> tuple[list[Message], int]:
-        lines, new_offset = read_complete_lines(path, offset)
+        lines, new_offset = read_lines(path, offset)
         session = _session_from_name(path)
         cwd = ""
         out = []

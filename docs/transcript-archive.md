@@ -30,12 +30,12 @@
 ~/.pi/agent/sessions/          ──rsync──▶ ~/transcript-archive/<设备>/pi/
 ```
 
-- **单向、只增。** 用 `rsync`，不带 `--delete`。本地被 agent 清理掉的文件在服务器上保留。不用 Syncthing，因为它会把删除同步过去。
+- **单向；客户端只增。** 用 `rsync`，不带 `--delete`。本地被 agent 清理掉的文件在服务器上保留；服务器再按热窗口/压缩策略处理旧文件。不用 Syncthing，因为它会把删除同步过去。
 - **与 vault 分开。** 归档不同步回任何设备，不注入任何 agent。只有服务器上的 dreaming 和重新提炼会读它。
-- **原样保存。** 不改写，不转换格式。
+- **热窗口内原样保存。** 超过 `AMEM_ARCHIVE_HOT_DAYS` 的文件不再重复上传，由服务器压缩或清理；压缩会解压比对 sha256，保证内容不变。分层与清除见 [retention.md](retention.md)。
 - **定时运行。** macOS 用 launchd 每小时一次（`scripts/archive-transcripts.sh` + `scripts/launchd/`；`scripts/install.sh` 会渲染并加载 plist，Linux 写入 cron）。
-- **归档目标。** 写在 `~/.config/amem/archive.env`（`AMEM_ARCHIVE_HOST=user@server`，或直接用 `AMEM_ARCHIVE_TARGET` 指定本地/远端路径）。首次全量上传前可先 `scripts/archive-transcripts.sh --dry-run`。
-- **本地兜底。** `install.sh` 把 Claude Code 的 `cleanupPeriodDays` 设为 `36500`。注意 issue #90148：项目级 `.claude/settings.json` 里的该值会覆盖全局清理行为，install 时一并检查。
+- **归档目标。** 写在 `~/.config/amem/archive.env`（`AMEM_ARCHIVE_HOST=user@server`，或直接用 `AMEM_ARCHIVE_TARGET` 指定本地/远端路径）。本地相对路径按运行脚本时的目录解析，不会写进源转录目录。首次全量上传前可先 `scripts/archive-transcripts.sh --dry-run`。
+- **本地兜底。** `install.sh` 把 Claude Code 的 `cleanupPeriodDays` 设为 `36500`。注意 issue #90148：项目级 `.claude/settings.json` 里的该值会覆盖全局清理行为，install 时一并检查。想释放本机空间时，把它改成 90–180 天，并确认不再需要 resume 更早的会话；`check-agents.sh` 会把任何自定义正整数视为有效值。需要让 install/check 统一按某个值执行时，设置 `AMEM_CLEANUP_DAYS`。
 
 ## 敏感信息
 
@@ -51,5 +51,7 @@
 
 ## 压缩与保留
 
-- 每月把上月目录用 `zstd` 压缩（jsonl 压缩率通常很高）。
-- 永久保留。
+原文不是永久保留：建议设置 90 天热窗口，之后服务器把冷文件压成
+`.jsonl.zst`，长期保留只含 user/assistant 文本的对话层（单条 assistant
+截到 2000 字符）；不再需要的项目用 `python3 -m amem.forget` 按 cwd 清除。
+完整分层、命令和边界见 [retention.md](retention.md)。

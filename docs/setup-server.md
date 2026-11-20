@@ -20,7 +20,7 @@ git clone https://github.com/LiBoHan95/agent-memory-sync ~/agent-memory-sync
 
 脚本会：
 
-- 安装 Syncthing、git、rsync、Python、固定版本的 Node 和 gitleaks；
+- 安装 Syncthing、git、rsync、zstd、Python、固定版本的 Node 和 gitleaks；
 - 从 `vault-template` 建立 vault（目录非空且不像 vault 时拒绝覆盖）；已有提交的 vault 不会再次执行 `git add`/commit，避免把未提交改动混成 `init vault`；
 - 启动 Syncthing，并尝试通过 `syncthing cli` 添加 `memory-vault` 文件夹；`--init-vault` 拒绝初始化时跳过添加；已有同名文件夹但路径不同时只提示，不自动改配置；
 - 生成 `amem-web.service` 和 `~/.config/amem/web.env`（权限 600），首次生成令牌并打印一次；
@@ -63,7 +63,7 @@ ssh -L 8384:127.0.0.1:8384 user@server
 macOS：
 
 ```bash
-brew install syncthing
+brew install syncthing zstd
 brew services start syncthing
 ```
 

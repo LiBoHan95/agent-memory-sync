@@ -9,6 +9,20 @@ set -uo pipefail
 VAULT="${AMEM_VAULT:-$HOME/memory-vault}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
+# 设置了 AMEM_CLEANUP_DAYS 就要求精确匹配；否则接受任何正整数（用户可能
+# 按 docs/transcript-archive.md 主动调到 90–180 天）。
+if [[ -n "${AMEM_CLEANUP_DAYS:-}" ]]; then
+    CLEANUP_EXACT=1
+else
+    CLEANUP_EXACT=0
+fi
+CLEANUP_DAYS="${AMEM_CLEANUP_DAYS:-36500}"
+if [[ ! "$CLEANUP_DAYS" =~ ^0*[1-9][0-9]*$ ]]; then
+    echo "AMEM_CLEANUP_DAYS 必须是正整数: ${CLEANUP_DAYS}" >&2
+    exit 2
+fi
+# 与 install.sh 一样去掉前导零后再比较。
+CLEANUP_DAYS=$((10#$CLEANUP_DAYS))
 FAIL=0
 
 ok() { printf '  [ok]   %s\n' "$*"; }
@@ -81,12 +95,18 @@ section "Claude Code"
 check_agent "Claude Code" "$HOME/.claude" "$HOME/.claude/CLAUDE.md"
 
 SETTINGS="$HOME/.claude/settings.json"
+GLOBAL_CLEANUP="$CLEANUP_DAYS"
 if [[ -f "$SETTINGS" ]]; then
     val="$(json_get "$SETTINGS" cleanupPeriodDays)"
-    if [[ "$val" == "36500" ]]; then
-        ok "cleanupPeriodDays=36500"
+    if [[ "$val" == "$CLEANUP_DAYS" ]]; then
+        ok "cleanupPeriodDays=$CLEANUP_DAYS"
+    elif (( CLEANUP_EXACT )); then
+        bad "cleanupPeriodDays=${val}（应为 ${CLEANUP_DAYS}，否则转录会被清理）"
+    elif [[ "$val" =~ ^[1-9][0-9]*$ ]]; then
+        ok "cleanupPeriodDays=${val}（自定义值；如需固定，设置 AMEM_CLEANUP_DAYS）"
+        GLOBAL_CLEANUP="$val"
     else
-        bad "cleanupPeriodDays=${val}（应为 36500，否则转录会被清理）"
+        bad "cleanupPeriodDays=${val}（未设置时会按默认 30 天清理转录）"
     fi
     if json_has_dir "$SETTINGS" "$VAULT"; then
         ok "permissions.additionalDirectories 含 vault"
@@ -102,7 +122,7 @@ for root in ${AMEM_PROJECT_ROOTS:-$HOME/dev $HOME/workspace $HOME/projects}; do
     [[ -d "$root" ]] || continue
     while IFS= read -r f; do
         val="$(json_get "$f" cleanupPeriodDays)"
-        if [[ "$val" != "unset" && "$val" != "36500" && "$val" != "读取失败" ]]; then
+        if [[ "$val" != "unset" && "$val" != "读取失败" && "$val" != "$GLOBAL_CLEANUP" ]]; then
             warn "$f 的 cleanupPeriodDays=${val}，会覆盖全局设置"
         fi
     done < <(find "$root" -maxdepth 4 -type f -path '*/.claude/settings.json' 2>/dev/null || true)

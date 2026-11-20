@@ -9,6 +9,7 @@
 - 任务涉及某个项目时，读 `~/memory-vault/projects/<项目名>.md`（如果存在）。
 - 记忆反映的是写入时的情况。引用其中的文件、命令、配置前先核实它们还存在。
 - `status: superseded` 的条目已经失效，不要依据它行动。
+- `projects/` 里没有某个项目页，可能只是没记过，也可能是用户刚删掉；不要凭旧对话把它重新建回来。
 
 ## 写
 
@@ -18,6 +19,7 @@
 - 不值得记的：代码里能查到的、只和本次对话有关的、你自己的推测。
 - `profile/`、`rules/`、`MEMORY.md` 只有在用户明确同意后才能修改。用户说"记住……"即视为同意。
 - 修改已有条目时更新 `updated` 和 `source`；事实被推翻时标 `status: superseded` 并填 `superseded_by`，不要删除。
+- 项目放弃或代码已删除时：只有用户明确说"删掉这个项目的记忆"，才删除 `projects/<name>.md` 并同步删 `MEMORY.md` 的索引行；删除前检查反链。`log/`、`profile/`、`rules/` 不因此删除。原始转录由用户执行 `python3 -m amem.forget --project <项目路径> --dry-run`（确认后加 `--yes`）清除，agent 不要自己动归档。
 
 ## 整理提案
 

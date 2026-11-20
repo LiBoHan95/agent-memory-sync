@@ -34,6 +34,17 @@
 - [x] 上 cron，每天一次（systemd timer，每天 04:30，Persistent=true）
 - [ ] 跟踪提案接受率，决定是否放宽分级
 
+## 留存与清除
+
+- [x] 解析器支持 `.jsonl.zst/.jsonl.zstd`，补齐 DSH 解析器
+- [x] `python3 -m amem.archive conversation / compact / stats`
+- [x] `python3 -m amem.forget`：按 cwd 清除项目转录、对话层、项目页和索引行，写删除清单
+- [x] `archive-transcripts.sh` 支持 `AMEM_ARCHIVE_HOT_DAYS` 热窗口
+- [ ] 服务器启用 90 天热窗口、180 天压缩（先 dry-run 核对体积）
+- [ ] `amem.archive prune`：压缩层超过保留期且对话层存在时自动删除冷文件
+- [ ] 本机 `cleanupPeriodDays` 从 36500 调到 90–180（确认不再 resume 更早会话后）
+- [ ] 旧项目 cockpit、dokodemo-door 的归档清除（约 350MB，需确认）
+
 ## 第三期：检索层（按需）
 
 触发条件：`projects/` 和 log 多到靠索引找不到东西。
